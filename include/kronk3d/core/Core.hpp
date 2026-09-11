@@ -21,7 +21,14 @@ namespace k3
             size_t                    viewHeight() const noexcept { return m_viewHeight; }
 
             void clear(const Color& color);
-            void draw(const Mesh& mesh);
+            
+            enum class Cull
+            {
+                None,  //!< No culling
+                CW,    //!< Clockwise
+                CCW,   //!< Counterclockwiser
+            };
+            void draw(const Mesh& mesh, Cull culling = Cull::None);
 
         protected:
             Color& at(size_t x, size_t y) { return m_pixels[x + y * m_viewWidth]; }

@@ -15,7 +15,7 @@ namespace k3
         std::fill_n(this->m_pixels.begin(), this->m_pixels.size(), color);
     }
 
-    void Rasterizer::draw(const Mesh& mesh)
+    void Rasterizer::draw(const Mesh& mesh, Cull culling)
     {
         for (size_t vertex = 0; vertex + 2 < mesh.vertices.size(); vertex += 3)
         {
@@ -25,7 +25,20 @@ namespace k3
             auto v2 = mesh.vertices[vertex + 2].asPoint();
 
             auto det012 = Vector4f::det(v1 - v0, v2 - v0);
-            if (det012 < 0.f) {
+            bool isCCW = det012 < 0.f;
+
+            switch (culling) {
+                case Cull::None:
+                    break;
+                case Cull::CW:
+                    if (!isCCW) continue;
+                    break;
+                case Cull::CCW:
+                    if (isCCW) continue;
+                    break;
+            }
+
+            if (isCCW) {
                 std::swap(v1, v2);
                 det012 = -det012;
             }
