@@ -3,6 +3,10 @@
 
 # Build
 build/
+*.out
 
 # Jsons
 compile_commands.json
+
+# Images
+*.bmp

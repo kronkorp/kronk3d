@@ -1,6 +1,7 @@
 
 #pragma once
 
+#include <fstream>
 #include <string_view>
 #include <system_error>
 
@@ -13,8 +14,8 @@ namespace k3
             Rasterizer() = default;
             ~Rasterizer() = default;
 
-            void saveImage(std::string_view file) const;
-            const Rasterizer& operator>>(std::string_view file) const;
+            void saveImage(const std::ifstream& file) const;
+            const Rasterizer& operator>>(const std::ifstream& file) const;
 
         private:
             // Private members
