@@ -1,7 +1,6 @@
-#include "utils/BaseException.hpp"
-
 #pragma once
 
+#include "utils/BaseException.hpp"
 namespace k3
 {
 
