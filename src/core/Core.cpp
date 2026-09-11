@@ -1,6 +1,6 @@
-#include <core/Core.hpp>
+#include <kronk3d/core/Core.hpp>
 #include <algorithm>
-#include "utils/Color.hpp"
+#include "kronk3d/utils/Color.hpp"
 
 namespace k3
 {

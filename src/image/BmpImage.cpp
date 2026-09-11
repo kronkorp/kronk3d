@@ -1,6 +1,7 @@
-#include "core/CoreException.hpp"
-#include "utils/Color.hpp"
-#include <image/BmpImage.hpp>
+#include "kronk3d/core/CoreException.hpp"
+#include "kronk3d/image/ImageException.hpp"
+#include "kronk3d/utils/Color.hpp"
+#include <kronk3d/image/BmpImage.hpp>
 #include <algorithm>
 #include <cstdint>
 #include <fstream>
@@ -38,7 +39,7 @@ void k3::BmpImage::save(std::string_view filename) const
 {
     std::ofstream file(std::string(filename), std::ios::binary);
     if (!file.is_open() || file.bad()) {
-        throw FileNotOpen();
+        throw FailedToOpenFile(filename);
     }
 
     constexpr uint16_t bitsPerPixel   = 24;

@@ -1,8 +1,8 @@
 
 #pragma once
 
-#include "image/Image.hpp"
-#include "utils/Color.hpp"
+#include "kronk3d/image/Image.hpp"
+#include "kronk3d/utils/Color.hpp"
 #include <cstddef>
 #include <string_view>
 #include <vector>

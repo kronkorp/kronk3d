@@ -1,7 +1,7 @@
 
 #pragma once
 
-#include "utils/Color.hpp"
+#include "kronk3d/utils/Color.hpp"
 #include <cstddef>
 #include <vector>
 

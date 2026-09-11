@@ -1,6 +1,7 @@
 #pragma once
 
-#include "utils/BaseException.hpp"
+#include "kronk3d/utils/BaseException.hpp"
+
 namespace k3
 {
 
@@ -12,12 +13,6 @@ namespace k3
 
             template<class... Args>
             CoreException(const std::string &format, Args&&... args) noexcept : BaseException(format, args...) {}
-    };
-
-    class FileNotOpen : public CoreException
-    {
-        public:
-            FileNotOpen() noexcept : CoreException("File not open.") {}
     };
 
 }
