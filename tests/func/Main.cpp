@@ -17,8 +17,8 @@ int main(void)
 
     std::vector<k3::Vector3f> vertices = {
         {100.f, 100.f, 0.f},
-        {200.f, 100.f, 0.f},
         {100.f, 200.f, 0.f},
+        {200.f, 100.f, 0.f},
     };
 
     auto point = std::chrono::high_resolution_clock::now().time_since_epoch();

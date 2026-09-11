@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <kronk3d/core/Core.hpp>
 #include <algorithm>
+#include <utility>
 #include "kronk3d/mesh/Mesh.hpp"
 #include "kronk3d/utils/Color.hpp"
 #include "kronk3d/utils/Vector.hpp"
@@ -22,6 +23,12 @@ namespace k3
             auto v0 = mesh.vertices[vertex + 0].asPoint();
             auto v1 = mesh.vertices[vertex + 1].asPoint();
             auto v2 = mesh.vertices[vertex + 2].asPoint();
+
+            auto det012 = Vector4f::det(v1 - v0, v2 - v0);
+            if (det012 < 0.f) {
+                std::swap(v1, v2);
+                det012 = -det012;
+            }
 
             auto xmin = std::max<size_t>(std::min({std::floor(v0.x), std::floor(v1.x), std::floor(v2.x)}), 0);
             auto xmax = std::min<size_t>(std::max({std::floor(v0.x), std::floor(v1.x), std::floor(v2.x)}), this->m_viewWidth - 1);
