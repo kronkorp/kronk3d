@@ -14,22 +14,34 @@ int main(void)
 {
     k3::Rasterizer core(800, 600);
 
-    core.clear(k3::Color::Green);
+    core.clear(k3::Color::Black);
 
-    std::vector<k3::Vector3f> vertices = {
-        {100.f, 100.f, 0.f},
-        {100.f, 200.f, 0.f},
-        {200.f, 100.f, 0.f},
+    k3::Vector3f vertices[] = {
+        {0.f, 0.f, 0.f},
+        {100.f, 0.f, 0.f},
+        {0.f, 100.f, 0.f},
+    };
+
+    k3::Color colors[] = {
+        k3::Color::Red,
+        k3::Color::Green,
+        k3::Color::Blue
     };
 
     auto point = std::chrono::high_resolution_clock::now().time_since_epoch();
 
-    core.draw(k3::Mesh{vertices, k3::Color::Red}, k3::Matrix4{
-        2, 0, 0, 0,
-        0, 2, 0, 0,
+    core.draw(k3::Mesh{
+            {vertices},
+            {colors},
+            3
+        },
+        k3::Matrix4{
+        1, 0, 0, 0,
+        0, 1, 0, 0,
         0, 0, 1, 0,
         0, 0, 0, 1
-    });
+        }
+    );
 
     std::chrono::high_resolution_clock::duration a = std::chrono::high_resolution_clock::now().time_since_epoch() - point;
     std::cout << "Took " << a << " ms to draw" << std::endl;

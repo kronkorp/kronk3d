@@ -18,12 +18,17 @@ namespace k3
 
     void Rasterizer::draw(const Mesh& mesh, const Matrix4& transform, Cull culling)
     {
-        for (size_t vertex = 0; vertex + 2 < mesh.vertices.size(); vertex += 3)
+        for (size_t vertex = 0; vertex + 2 < mesh.vertex_count; vertex += 3)
         {
             // -> Vectors representing each points of the vertex
             auto v0 = transform * mesh.vertices[vertex + 0].asPoint();
             auto v1 = transform * mesh.vertices[vertex + 1].asPoint();
             auto v2 = transform * mesh.vertices[vertex + 2].asPoint();
+
+            // -> Colors
+            auto c0 = mesh.colors[vertex + 0];
+            auto c1 = mesh.colors[vertex + 1];
+            auto c2 = mesh.colors[vertex + 2];
 
             auto det012 = Vector4f::det(v1 - v0, v2 - v0);
             bool isCCW = det012 < 0.f;
@@ -58,7 +63,16 @@ namespace k3
                     float det20 = Vector4f::det(v0 - v2, p - v2);
 
                     if (det01 >= 0.f && det12 >= 0.f && det20 >= 0.f) {
-                        this->at(x, y) = mesh.color;
+                        float l0 = det12 / det012;
+                        float l1 = det20 / det012;
+                        float l2 = det01 / det012;
+
+                        this->at(x, y) = Color(
+                            l0 * c0.r + l1 * c1.r + l2 * c2.r,
+                            l0 * c0.g + l1 * c1.g + l2 * c2.g,
+                            l0 * c0.b + l1 * c1.b + l2 * c2.b,
+                            l0 * c0.a + l1 * c1.a + l2 * c2.a
+                        );
                     }
                 }
             }
