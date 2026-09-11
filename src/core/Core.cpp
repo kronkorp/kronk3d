@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstddef>
 #include <kronk3d/core/Core.hpp>
 #include <algorithm>
@@ -22,8 +23,13 @@ namespace k3
             auto v1 = mesh.vertices[vertex + 1].asPoint();
             auto v2 = mesh.vertices[vertex + 2].asPoint();
 
-            for (size_t y = 0; y < this->m_viewHeight; ++y) {
-                for (size_t x = 0; x < this->m_viewWidth; ++x) {
+            auto xmin = std::max<size_t>(std::min({std::floor(v0.x), std::floor(v1.x), std::floor(v2.x)}), 0);
+            auto xmax = std::min<size_t>(std::max({std::floor(v0.x), std::floor(v1.x), std::floor(v2.x)}), this->m_viewWidth - 1);
+            auto ymin = std::max<size_t>(std::min({std::floor(v0.y), std::floor(v1.y), std::floor(v2.y)}), 0);
+            auto ymax = std::min<size_t>(std::max({std::floor(v0.y), std::floor(v1.y), std::floor(v2.y)}), this->m_viewHeight - 1);
+
+            for (size_t y = ymin; y <= ymax; ++y) {
+                for (size_t x = xmin; x <= xmax; ++x) {
                     Vector4f p(x + 0.5f, y + 0.5f, 0.f, 0.f);
 
                     float det01 = Vector4f::det(v1 - v0, p - v0);
