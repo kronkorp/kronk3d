@@ -1,13 +1,32 @@
 
 #include "kronk3d/core/Core.hpp"
 #include "kronk3d/image/BmpImage.hpp"
+#include "kronk3d/mesh/Mesh.hpp"
 #include "kronk3d/utils/Color.hpp"
+#include "kronk3d/utils/Vector.hpp"
+#include <chrono>
+#include <iostream>
+#include <ostream>
+#include <vector>
 
 int main(void)
 {
     k3::Rasterizer core(800, 600);
 
     core.clear(k3::Color::Green);
+
+    std::vector<k3::Vector3f> vertices = {
+        {100.f, 100.f, 0.f},
+        {200.f, 100.f, 0.f},
+        {100.f, 200.f, 0.f},
+    };
+
+    auto point = std::chrono::high_resolution_clock::now().time_since_epoch();
+
+    core.draw(k3::Mesh{vertices, k3::Color::Red});
+
+    std::chrono::high_resolution_clock::duration a = std::chrono::high_resolution_clock::now().time_since_epoch() - point;
+    std::cout << "Took " << a << " ms to draw" << std::endl;
 
     k3::BmpImage image(core.framebuffer(), core.viewWidth(), core.viewHeight());
     image.save("out.bmp");

@@ -1,6 +1,7 @@
 
 #pragma once
 
+#include "kronk3d/mesh/Mesh.hpp"
 #include "kronk3d/utils/Color.hpp"
 #include <cstddef>
 #include <vector>
@@ -20,6 +21,10 @@ namespace k3
             size_t                    viewHeight() const noexcept { return m_viewHeight; }
 
             void clear(const Color& color);
+            void draw(const Mesh& mesh);
+
+        protected:
+            Color& at(size_t x, size_t y) { return m_pixels[x + y * m_viewWidth]; }
 
         private:
             std::vector<Color>  m_pixels;   //!< The framebuffer of pixels

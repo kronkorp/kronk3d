@@ -34,6 +34,11 @@ namespace k3
         {
             return x * other.y - y * other.x;
         }
+
+        static float det(const Vector4<T>& v0, const Vector4<T>& v1)
+        {
+            return v0.x * v1.y - v0.y * v1.x;
+        }
     };
 
     using Vector4f = Vector4<float>;
@@ -49,12 +54,12 @@ namespace k3
 
         inline Vector3(T x, T y, T z) : x(x), y(y), z(z) {}
 
-        inline Vector4<T> asVector()
+        inline Vector4<T> asVector() const
         {
             return Vector4<T>(x, y, z, 0.f);
         }
 
-        inline Vector4<T> asPoint()
+        inline Vector4<T> asPoint() const
         {
             return Vector4<T>(x, y, z, 1.f);
         }
