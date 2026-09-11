@@ -20,6 +20,8 @@ namespace k3
             size_t                    viewWidth() const noexcept { return m_viewWidth; }
             size_t                    viewHeight() const noexcept { return m_viewHeight; }
 
+            void clear(const Color& color);
+
         private:
             std::vector<Pixel>  m_pixels;   //!< The framebuffer of pixels
             std::vector<double> m_zbuffer;  //!< The zbuffer of pixels
