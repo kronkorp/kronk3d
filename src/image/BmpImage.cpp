@@ -1,4 +1,5 @@
 #include "core/CoreException.hpp"
+#include "utils/Color.hpp"
 #include <image/BmpImage.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -76,7 +77,7 @@ void k3::BmpImage::save(std::string_view filename) const
 
     for (size_t y = this->m_height; y-- > 0;) {
         for (size_t x = 0; x < this->m_width; ++x) {
-            const k3::Pixel& pixel = this->m_pixels[y * this->m_width + x];
+            const k3::Color& pixel = this->m_pixels[y * this->m_width + x];
             const char bgr[3] = {
                 static_cast<char>(toByte(pixel.b)),
                 static_cast<char>(toByte(pixel.g)),

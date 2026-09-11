@@ -1,9 +1,8 @@
 
 #pragma once
 
-#include "pixel/Pixel.hpp"
+#include "utils/Color.hpp"
 #include <cstddef>
-#include <cstdint>
 #include <vector>
 
 namespace k3
@@ -16,14 +15,14 @@ namespace k3
             Rasterizer(const Rasterizer& other) = delete;
             ~Rasterizer() = default;
 
-            const std::vector<Pixel>& framebuffer() const noexcept { return m_pixels; }
+            const std::vector<Color>& framebuffer() const noexcept { return m_pixels; }
             size_t                    viewWidth() const noexcept { return m_viewWidth; }
             size_t                    viewHeight() const noexcept { return m_viewHeight; }
 
             void clear(const Color& color);
 
         private:
-            std::vector<Pixel>  m_pixels;   //!< The framebuffer of pixels
+            std::vector<Color>  m_pixels;   //!< The framebuffer of pixels
             std::vector<double> m_zbuffer;  //!< The zbuffer of pixels
 
             size_t              m_viewWidth;  //!< The widht of view in px
