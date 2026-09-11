@@ -14,8 +14,8 @@ namespace k3
             Rasterizer() = default;
             ~Rasterizer() = default;
 
-            void saveImage(const std::ifstream& file) const;
-            const Rasterizer& operator>>(const std::ifstream& file) const;
+            void saveImage(const std::ofstream& file) const;
+            const Rasterizer& operator>>(const std::ofstream& file) const;
 
         private:
             // Private members

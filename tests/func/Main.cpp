@@ -5,7 +5,7 @@ int main(void)
 {
     k3::Rasterizer core;
 
-    std::ifstream out;
+    std::ofstream out;
 
     out.open("out.bmp", std::ios::app);
 
