@@ -1,7 +1,7 @@
 
-#include "core/Core.hpp"
-#include "image/BmpImage.hpp"
-#include "utils/Color.hpp"
+#include "kronk3d/core/Core.hpp"
+#include "kronk3d/image/BmpImage.hpp"
+#include "kronk3d/utils/Color.hpp"
 
 int main(void)
 {
