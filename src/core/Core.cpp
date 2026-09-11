@@ -5,6 +5,7 @@
 #include <utility>
 #include "kronk3d/mesh/Mesh.hpp"
 #include "kronk3d/utils/Color.hpp"
+#include "kronk3d/utils/Matrix.hpp"
 #include "kronk3d/utils/Vector.hpp"
 
 namespace k3
@@ -15,14 +16,14 @@ namespace k3
         std::fill_n(this->m_pixels.begin(), this->m_pixels.size(), color);
     }
 
-    void Rasterizer::draw(const Mesh& mesh, Cull culling)
+    void Rasterizer::draw(const Mesh& mesh, const Matrix4& transform, Cull culling)
     {
         for (size_t vertex = 0; vertex + 2 < mesh.vertices.size(); vertex += 3)
         {
             // -> Vectors representing each points of the vertex
-            auto v0 = mesh.vertices[vertex + 0].asPoint();
-            auto v1 = mesh.vertices[vertex + 1].asPoint();
-            auto v2 = mesh.vertices[vertex + 2].asPoint();
+            auto v0 = transform * mesh.vertices[vertex + 0].asPoint();
+            auto v1 = transform * mesh.vertices[vertex + 1].asPoint();
+            auto v2 = transform * mesh.vertices[vertex + 2].asPoint();
 
             auto det012 = Vector4f::det(v1 - v0, v2 - v0);
             bool isCCW = det012 < 0.f;

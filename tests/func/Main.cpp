@@ -3,6 +3,7 @@
 #include "kronk3d/image/BmpImage.hpp"
 #include "kronk3d/mesh/Mesh.hpp"
 #include "kronk3d/utils/Color.hpp"
+#include "kronk3d/utils/Matrix.hpp"
 #include "kronk3d/utils/Vector.hpp"
 #include <chrono>
 #include <iostream>
@@ -23,7 +24,12 @@ int main(void)
 
     auto point = std::chrono::high_resolution_clock::now().time_since_epoch();
 
-    core.draw(k3::Mesh{vertices, k3::Color::Red});
+    core.draw(k3::Mesh{vertices, k3::Color::Red}, k3::Matrix4{
+        2, 0, 0, 0,
+        0, 2, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1
+    });
 
     std::chrono::high_resolution_clock::duration a = std::chrono::high_resolution_clock::now().time_since_epoch() - point;
     std::cout << "Took " << a << " ms to draw" << std::endl;
