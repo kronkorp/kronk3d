@@ -19,6 +19,14 @@ namespace k3
         inline Vector3(T x, T y, T z) : x(x), y(y), z(z) {}
     };
 
+    template<typename T>
+    struct Vector4
+    {
+        T x, y, z, a;
+
+        inline Vector4(T x, T y, T z, T a) : x(x), y(y), z(z), a(a) {}
+    };
+
     // NOTE: Vector2's
     using Vector2f = Vector2<float>;
     using Vector2u = Vector2<unsigned int>;
@@ -30,5 +38,10 @@ namespace k3
     using Vector3u = Vector3<unsigned int>;
     using Vector3i = Vector3<int>;
     using Vector3d = Vector3<double>;
+
+    using Vector4f = Vector4<float>;
+    using Vector4u = Vector4<unsigned int>;
+    using Vector4i = Vector4<int>;
+    using Vector4d = Vector4<double>;
 
 }
