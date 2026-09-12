@@ -4,6 +4,7 @@
 #include "kronk3d/mesh/Mesh.hpp"
 #include "kronk3d/utils/Color.hpp"
 #include "kronk3d/utils/Matrix.hpp"
+#include "kronk3d/viewport/ViewPort.hpp"
 #include <cstddef>
 #include <vector>
 
@@ -29,7 +30,13 @@ namespace k3
                 CW,    //!< Clockwise
                 CCW,   //!< Counterclockwiser
             };
-            void draw(const Mesh& mesh, const Matrix4& transform = Matrix4::identity(), Cull culling = Cull::None);
+
+            void draw(
+                const Mesh& mesh,
+                const ViewPort& viewport,
+                const Matrix4& transform = Matrix4::identity(),
+                Cull culling = Cull::None
+            );
 
         protected:
             Color& at(size_t x, size_t y) { return m_pixels[x + y * m_viewWidth]; }

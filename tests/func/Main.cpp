@@ -5,6 +5,7 @@
 #include "kronk3d/utils/Color.hpp"
 #include "kronk3d/utils/Matrix.hpp"
 #include "kronk3d/utils/Vector.hpp"
+#include "kronk3d/viewport/ViewPort.hpp"
 #include <chrono>
 #include <iostream>
 #include <ostream>
@@ -14,18 +15,18 @@ int main(void)
 {
     k3::Rasterizer core(800, 600);
 
-    core.clear(k3::Color::Black);
+    core.clear(k3::Color::White);
 
     k3::Vector3f vertices[] = {
-        {0.f, 0.f, 0.f},
-        {100.f, 0.f, 0.f},
-        {0.f, 100.f, 0.f},
+        {0.f, 0.5f, 0.f},
+        {-0.5f, -0.5f, 0.f},
+        {0.5f, -0.5f, 0.f},
     };
 
     k3::Color colors[] = {
         k3::Color::Red,
         k3::Color::Green,
-        k3::Color::Blue
+        k3::Color::Blue,
     };
 
     auto point = std::chrono::high_resolution_clock::now().time_since_epoch();
@@ -35,11 +36,8 @@ int main(void)
             {colors},
             3
         },
-        k3::Matrix4{
-        1, 0, 0, 100,
-        0, 1, 0, 100,
-        0, 0, 1, 0,
-        0, 0, 0, 1
+        k3::ViewPort{
+            0, 800, 0, 600
         }
     );
 

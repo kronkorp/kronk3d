@@ -76,7 +76,7 @@ void k3::BmpImage::save(std::string_view filename) const
     const char   padding[3]  = {0, 0, 0};
     const size_t paddingSize = rowSize - width * 3;
 
-    for (size_t y = this->m_height; y-- > 0;) {
+    for (size_t y = 0; y < this->m_height; ++y) {
         for (size_t x = 0; x < this->m_width; ++x) {
             const k3::Color& pixel = this->m_pixels[y * this->m_width + x];
             const char bgr[3] = {

@@ -1,5 +1,6 @@
 #include <cmath>
 #include <cstddef>
+#include <cstdint>
 #include <kronk3d/core/Core.hpp>
 #include <algorithm>
 #include <utility>
@@ -7,6 +8,7 @@
 #include "kronk3d/utils/Color.hpp"
 #include "kronk3d/utils/Matrix.hpp"
 #include "kronk3d/utils/Vector.hpp"
+#include "kronk3d/viewport/ViewPort.hpp"
 
 namespace k3
 {
@@ -16,7 +18,12 @@ namespace k3
         std::fill_n(this->m_pixels.begin(), this->m_pixels.size(), color);
     }
 
-    void Rasterizer::draw(const Mesh& mesh, const Matrix4& transform, Cull culling)
+    void Rasterizer::draw(
+        const Mesh& mesh,
+        const ViewPort& viewport,
+        const Matrix4& transform,
+        Cull culling
+    )
     {
         for (size_t vertex = 0; vertex + 2 < mesh.vertex_count; vertex += 3)
         {
@@ -24,6 +31,11 @@ namespace k3
             auto v0 = transform * mesh.vertices[vertex + 0].asPoint();
             auto v1 = transform * mesh.vertices[vertex + 1].asPoint();
             auto v2 = transform * mesh.vertices[vertex + 2].asPoint();
+
+            // -> Apply viewport
+            v0 = viewport.applyTo(v0);
+            v1 = viewport.applyTo(v1);
+            v2 = viewport.applyTo(v2);
 
             // -> Colors
             auto c0 = mesh.colors[vertex + 0];
@@ -49,10 +61,15 @@ namespace k3
                 det012 = -det012;
             }
 
-            auto xmin = std::max<size_t>(std::min({std::floor(v0.x), std::floor(v1.x), std::floor(v2.x)}), 0);
-            auto xmax = std::min<size_t>(std::max({std::floor(v0.x), std::floor(v1.x), std::floor(v2.x)}), this->m_viewWidth - 1);
-            auto ymin = std::max<size_t>(std::min({std::floor(v0.y), std::floor(v1.y), std::floor(v2.y)}), 0);
-            auto ymax = std::min<size_t>(std::max({std::floor(v0.y), std::floor(v1.y), std::floor(v2.y)}), this->m_viewHeight - 1);
+            std::int32_t xmin = std::max<std::int32_t>(viewport.xmin, 0);
+            std::int32_t xmax = std::min<std::int32_t>(viewport.xmax, m_viewWidth) - 1;
+            std::int32_t ymin = std::max<std::int32_t>(viewport.ymin, 0);
+            std::int32_t ymax = std::min<std::int32_t>(viewport.ymax, m_viewHeight) - 1;
+
+            xmin = std::max<float>(std::min({std::floor(v0.x), std::floor(v1.x), std::floor(v2.x)}), xmin);
+            xmax = std::min<float>(std::max({std::floor(v0.x), std::floor(v1.x), std::floor(v2.x)}), xmax);
+            ymin = std::max<float>(std::min({std::floor(v0.y), std::floor(v1.y), std::floor(v2.y)}), ymin);
+            ymax = std::min<float>(std::max({std::floor(v0.y), std::floor(v1.y), std::floor(v2.y)}), ymax);
 
             for (size_t y = ymin; y <= ymax; ++y) {
                 for (size_t x = xmin; x <= xmax; ++x) {
