@@ -73,7 +73,7 @@ int main(void)
                 * k3::Matrix4::scale({600 * 1.f / 800, 1.f, 1.f})
                 * k3::Matrix4::rotateZX(angle)
                 * k3::Matrix4::rotateXY(angle * 1.61f),
-            k3::Rasterizer::Cull::CCW
+            k3::Rasterizer::Cull::CW
         );
 
         std::chrono::high_resolution_clock::duration a = std::chrono::high_resolution_clock::now().time_since_epoch() - point;
