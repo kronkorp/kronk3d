@@ -25,12 +25,22 @@ namespace k3
         Cull culling
     )
     {
-        for (size_t vertex = 0; vertex + 2 < mesh.vertex_count; vertex += 3)
+        for (size_t vertex = 0; vertex + 2 < mesh.count; vertex += 3)
         {
+            auto i0 = vertex + 0;
+            auto i1 = vertex + 1;
+            auto i2 = vertex + 2;
+
+            if (mesh.indices) {
+                i0 = mesh.indices[i0];
+                i1 = mesh.indices[i1];
+                i2 = mesh.indices[i2];
+            }
+
             // -> Vectors representing each points of the vertex
-            auto v0 = transform * mesh.vertices[vertex + 0].asPoint();
-            auto v1 = transform * mesh.vertices[vertex + 1].asPoint();
-            auto v2 = transform * mesh.vertices[vertex + 2].asPoint();
+            auto v0 = transform * mesh.vertices[i0].asPoint();
+            auto v1 = transform * mesh.vertices[i1].asPoint();
+            auto v2 = transform * mesh.vertices[i2].asPoint();
 
             // -> Apply viewport
             v0 = viewport.applyTo(v0);
@@ -38,9 +48,9 @@ namespace k3
             v2 = viewport.applyTo(v2);
 
             // -> Colors
-            auto c0 = mesh.colors[vertex + 0];
-            auto c1 = mesh.colors[vertex + 1];
-            auto c2 = mesh.colors[vertex + 2];
+            auto c0 = mesh.colors[i0];
+            auto c1 = mesh.colors[i1];
+            auto c2 = mesh.colors[i2];
 
             auto det012 = Vector4f::det(v1 - v0, v2 - v0);
             bool isCCW = det012 < 0.f;

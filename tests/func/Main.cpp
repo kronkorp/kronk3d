@@ -18,23 +18,31 @@ int main(void)
     core.clear(k3::Color::White);
 
     k3::Vector3f vertices[] = {
-        {0.f, 0.5f, 0.f},
         {-0.5f, -0.5f, 0.f},
+        {-0.5f, 0.5f, 0.f},
         {0.5f, -0.5f, 0.f},
+        {0.5f, 0.5f, 0.f},
     };
 
     k3::Color colors[] = {
         k3::Color::Red,
         k3::Color::Green,
         k3::Color::Blue,
+        k3::Color::White
     };
 
     auto point = std::chrono::high_resolution_clock::now().time_since_epoch();
 
+    size_t indices[] = {
+        0, 1, 2,
+        2, 1, 3
+    };
+
     core.draw(k3::Mesh{
             {vertices},
             {colors},
-            3
+            indices,
+            6
         },
         k3::ViewPort{
             0, 800, 0, 600

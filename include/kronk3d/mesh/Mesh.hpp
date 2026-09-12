@@ -2,6 +2,7 @@
 
 #include "kronk3d/utils/Vector.hpp"
 #include "kronk3d/utils/Color.hpp"
+#include <cstddef>
 #include <vector>
 
 namespace k3
@@ -23,7 +24,8 @@ namespace k3
         // NOTE: Vertex count is vertices.size() / 3.
         Box<Vector3f> vertices     = {};
         Box<Color>    colors       = {};
-        size_t        vertex_count = 0;
+        size_t*       indices      = nullptr;
+        size_t        count        = 0;
     };
 
 }
