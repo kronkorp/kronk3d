@@ -39,7 +39,8 @@ namespace k3
             );
 
         protected:
-            Color& at(size_t x, size_t y) { return m_pixels[x + y * m_viewWidth]; }
+            Color&  m_at(size_t x, size_t y) { return m_pixels[x + y * m_viewWidth]; }
+            Vertex *m_clip(Vertex *begin, Vertex *end);
 
         private:
             std::vector<Color>  m_pixels;   //!< The framebuffer of pixels

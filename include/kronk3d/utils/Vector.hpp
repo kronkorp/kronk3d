@@ -35,9 +35,22 @@ namespace k3
             return x * other.y - y * other.x;
         }
 
-        static float det(const Vector4<T>& v0, const Vector4<T>& v1)
+        static inline float det(const Vector4<T>& v0, const Vector4<T>& v1)
         {
             return v0.x * v1.y - v0.y * v1.x;
+        }
+
+        static inline Vector4<T> perspective_divide(Vector4<T> v)
+        {
+            v.x /= v.w;
+            v.y /= v.w;
+            v.z /= v.w;
+            return v;
+        }
+
+        static inline float dot(const Vector4<T>& v1, const Vector4<T>& v2)
+        {
+            return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z + v1.w * v2.w;
         }
     };
 
@@ -46,6 +59,10 @@ namespace k3
     using Vector4i = Vector4<int>;
     using Vector4d = Vector4<double>;
 
+    inline Vector4f operator*(const Vector4f& color, float t)
+    {
+        return Vector4f(color.x * t, color.y * t, color.z * t, color.w * t);
+    }
 
     template<typename T>
     struct Vector3
