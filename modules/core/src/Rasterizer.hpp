@@ -7,8 +7,6 @@
 
 #pragma once
 
-#include <vector>
-
 namespace k3
 {
 
@@ -16,6 +14,7 @@ namespace k3
     {
         public:
             Rasterizer();
+            ~Rasterizer() = default;
 
             void draw();
 
