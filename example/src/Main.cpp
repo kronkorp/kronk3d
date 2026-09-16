@@ -49,7 +49,8 @@ int main(void)
         }
 
         engine.clear(k3::Math::Vector4f(1.f, 1.f, 1.f, 1.f));
-        engine.draw();
+
+        // engine.draw();
 
         window.clear(sf::Color::Black);
 

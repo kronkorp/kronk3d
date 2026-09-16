@@ -8,6 +8,8 @@
 #pragma once
 
 #include "Vector.hpp"
+#include "utils/Mesh.hpp"
+#include "utils/Viewport.hpp"
 #include <cstddef>
 #include <vector>
 
@@ -23,7 +25,8 @@ namespace k3
             Rasterizer(std::size_t width, std::size_t height);
             ~Rasterizer() = default;
 
-            void draw();
+            void draw(const Mesh& mesh, const Viewport& viewport);
+
             void clear(const Math::Vector4f& color) noexcept;
 
             [[nodiscard]] const FrameBuffer& framebuffer(void) const noexcept;
