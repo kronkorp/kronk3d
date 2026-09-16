@@ -8,7 +8,9 @@
 #pragma once
 
 #include "Vector.hpp"
+#include <cstddef>
 #include <vector>
+
 namespace k3
 {
 
@@ -18,7 +20,7 @@ namespace k3
         using DepthBuffer = std::vector<float>;
 
         public:
-            Rasterizer();
+            Rasterizer(std::size_t width, std::size_t height);
             ~Rasterizer() = default;
 
             void draw();

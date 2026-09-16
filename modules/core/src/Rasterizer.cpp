@@ -8,10 +8,12 @@
 #include "Rasterizer.hpp"
 #include "Vector.hpp"
 #include <algorithm>
+#include <cstddef>
+#include <iterator>
 
-k3::Rasterizer::Rasterizer()
+k3::Rasterizer::Rasterizer(std::size_t width, std::size_t height) : m_frameBuffer(width * height), m_depthBuffer(width * height)
 {
-    // To implement
+    // this->m_frameBuffer.reserve(width * height);
 }
 
 void k3::Rasterizer::draw()

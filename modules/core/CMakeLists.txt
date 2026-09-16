@@ -20,8 +20,8 @@ set_target_properties(kronk3d_shared PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 ###
 
-target_link_libraries(kronk3d_shared PRIVATE math logger)
-target_link_libraries(kronk3d_static PRIVATE math logger)
+target_link_libraries(kronk3d_shared PUBLIC math PRIVATE logger)
+target_link_libraries(kronk3d_static PUBLIC math PRIVATE logger)
 
 ###
 
