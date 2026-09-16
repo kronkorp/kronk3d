@@ -9,3 +9,5 @@ add_subdirectory(modules/math)
 # add_subdirectory(modules/api)
 add_subdirectory(modules/logger)
 add_subdirectory(modules/core)
+
+add_subdirectory(example)
