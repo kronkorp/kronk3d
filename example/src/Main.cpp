@@ -6,7 +6,9 @@
 #include "utils/Mesh.hpp"
 #include "utils/Viewport.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <format>
 #include "cube/Cube.hpp"
 
 static sf::Image toImage(const std::vector<k3::Math::Color>& pixels, size_t width, size_t height)
@@ -62,6 +64,12 @@ int main(void)
         HEIGHT
     };
 
+    using Clock = std::chrono::steady_clock;
+
+    std::size_t frameCount = 0;
+    double drawTimeAccumulatedMs = 0.0;
+    auto statsTimer = Clock::now();
+
     while (window.isOpen()) {
         sf::Event event;
         while (window.pollEvent(event)) {
@@ -70,6 +78,8 @@ int main(void)
         }
 
         engine.clear(k3::Math::Color::Grey);
+
+        const auto drawStart = Clock::now();
         engine.draw(
             cube,
             viewport,
@@ -79,6 +89,8 @@ int main(void)
                 * k3::Math::Matrix4::rotateYZ(0.5f),
             k3::Rasterizer::Cull::CW
         );
+        const auto drawEnd = Clock::now();
+        drawTimeAccumulatedMs += std::chrono::duration<double, std::milli>(drawEnd - drawStart).count();
 
         window.clear(sf::Color::Black);
 
@@ -91,6 +103,21 @@ int main(void)
         }
 
         window.display();
+
+        frameCount++;
+        const auto now = Clock::now();
+        const auto statsElapsed = now - statsTimer;
+        if (statsElapsed >= std::chrono::seconds(1)) {
+            const double elapsedSeconds = std::chrono::duration<double>(statsElapsed).count();
+            const double fps = frameCount / elapsedSeconds;
+            const double avgDrawMs = drawTimeAccumulatedMs / frameCount;
+
+            window.setTitle(std::format("kronk3d — FPS: {:.1f} | draw: {:.3f} ms", fps, avgDrawMs));
+
+            frameCount = 0;
+            drawTimeAccumulatedMs = 0.0;
+            statsTimer = now;
+        }
     }
 
     return 0;
