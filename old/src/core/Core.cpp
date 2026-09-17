@@ -73,7 +73,7 @@ namespace k3
 
                 auto det012 = Vector4f::det(v1.point - v0.point, v2.point - v0.point);
                 bool isCCW = det012 < 0.f;
-                
+
                 switch (culling) {
                     case Cull::None:
                         break;

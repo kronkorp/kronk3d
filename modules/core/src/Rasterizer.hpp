@@ -30,10 +30,13 @@ namespace k3
             void clear(const Math::Color& color) noexcept;
 
             [[nodiscard]] const FrameBuffer& framebuffer(void) const noexcept;
+            [[nodiscard]] const Math::Color& pixel(std::size_t x, std::size_t y) const;
+            [[nodiscard]] Math::Color&       pixel(std::size_t x, std::size_t y);
 
         private:
             FrameBuffer m_frameBuffer;
             DepthBuffer m_depthBuffer;
+            size_t      m_width, m_height;
     };
 
 }

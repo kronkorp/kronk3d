@@ -20,7 +20,7 @@ namespace k3
         inline Math::Vector4f applyTo(Math::Vector4f vec) const
         {
             vec.x = xmin + (xmax - xmin) * (0.5f + 0.5f * vec.x);
-            vec.y = ymin + (ymax - ymin) * (0.5f + 0.5f * vec.y);
+            vec.y = ymin + (ymax - ymin) * (0.5f - 0.5f * vec.y);
             return vec;
         };
     };

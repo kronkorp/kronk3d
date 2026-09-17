@@ -11,7 +11,7 @@ namespace k3::Math
 
     struct Color
     {
-        float r{}, g{}, b{}, a{1.f};
+        float r{}, g{}, b{}, a{};
 
         static inline Color fromRGB(unsigned char r, unsigned char g, unsigned char b, unsigned char a = 255)
         {

@@ -30,6 +30,16 @@ namespace k3::Math
     struct Vector4
     {
         T x{}, y{}, z{}, w{};
+
+        inline Vector4<T> operator-(const Vector4<T>& other) const
+        {
+            return Vector4<T>(x - other.x, y - other.y, z - other.z, w - other.w);
+        }
+
+        static inline float det(const Vector4<T>& v0, const Vector4<T>& v1)
+        {
+            return v0.x * v1.y - v0.y * v1.x;
+        }
     };
 
     using Vector2f = Vector2<float>;
