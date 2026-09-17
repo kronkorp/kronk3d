@@ -43,13 +43,14 @@ int main(void)
 
     k3::Mesh mesh{
         .vertices = {
-            {0.f, 0.5f, 0.f},
             {-0.5f, -0.5f, 0.f},
+            {-0.5f, 0.5f, 0.f},
             {0.5f, -0.5f, 0.f},
+            {0.5f, 0.5f, 0.f},
         },
-        .colors = {k3::Math::Color::Red, k3::Math::Color::Blue, k3::Math::Color::Green},
-        .indices = {0, 1, 2},
-        .count = 3  // 3 segment
+        .colors = {k3::Math::Color::Red, k3::Math::Color::Blue, k3::Math::Color::Green, k3::Math::Color::Yellow},
+        .indices = {0, 1, 2, 2, 1, 3},
+        .count = 6  // 3 segment
     };
 
     k3::Viewport viewport{
