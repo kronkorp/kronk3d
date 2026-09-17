@@ -1,10 +1,8 @@
 #include <SFML/Graphics.hpp>
 #include <SFML/Graphics/Image.hpp>
-
 #include "Color.hpp"
 #include "Rasterizer.hpp"
-#include "Vector.hpp"
-
+#include "utils/Mesh.hpp"
 #include <algorithm>
 #include <cstdint>
 
@@ -36,11 +34,22 @@ int main(void)
     static constexpr size_t WIDTH = 800;
     static constexpr size_t HEIGHT = 600;
 
-    k3::Rasterizer engine(800, 600);
+    k3::Rasterizer engine(WIDTH, HEIGHT);
 
     sf::RenderWindow window(sf::VideoMode(WIDTH, HEIGHT), "kronk3d");
     sf::Texture texture;
     sf::Sprite sprite;
+
+    k3::Mesh mesh{
+        .vertices = {
+            {-0.5f, 0.5f, 0.f},
+            {0.5f, 0.5f},
+            {0.f, -0.5f}
+        },
+        .colors = {},
+        .indices = {1, 2, 3},
+        .count = 1
+    };
 
     while (window.isOpen()) {
         sf::Event event;
