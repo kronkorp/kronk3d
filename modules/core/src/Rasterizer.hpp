@@ -22,21 +22,21 @@ namespace k3
         using FrameBuffer = std::vector<Math::Color>;
         using DepthBuffer = std::vector<float>;
 
-        enum class Cull {
-            None,
-            CW,
-            CCW
-        };
-
         public:
             Rasterizer(std::size_t width, std::size_t height);
             ~Rasterizer() = default;
+
+            enum class Cull {
+                None,
+                CW,
+                CCW
+            };
 
             void draw(const Mesh& mesh, const Viewport& viewport, const Math::Matrix4& transform = Math::Matrix4::identity(), Cull culling = Cull::CW);
 
             void clear(const Math::Color& color) noexcept;
 
-            [[nodiscard]] const FrameBuffer& framebuffer(void) const noexcept;
+            [[nodiscard]] const FrameBuffer& framebuffer(void)                   const noexcept;
             [[nodiscard]] const Math::Color& pixel(std::size_t x, std::size_t y) const;
             [[nodiscard]] Math::Color&       pixel(std::size_t x, std::size_t y);
 

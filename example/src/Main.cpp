@@ -73,7 +73,8 @@ int main(void)
             mesh,
             viewport,
             k3::Math::Matrix4::scale(0.5f)
-                * k3::Math::Matrix4::rotateXY(0.3f)
+                * k3::Math::Matrix4::rotateXY(0.3f),
+            k3::Rasterizer::Cull::CCW
         );
 
         window.clear(sf::Color::Black);

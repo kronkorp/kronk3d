@@ -61,6 +61,17 @@ void k3::Rasterizer::draw(
         // To do face culling
         bool isCCW = det012 < 0.f;
 
+        switch (culling) {
+            case k3::Rasterizer::Cull::None:
+                break;
+            case k3::Rasterizer::Cull::CW:
+                if (!isCCW) continue;
+                break;
+            case k3::Rasterizer::Cull::CCW:
+                if (isCCW) continue;
+                break;
+        }
+
         if (isCCW) {
             std::swap(v1, v2);
             det012 = -det012;
