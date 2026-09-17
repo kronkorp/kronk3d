@@ -67,11 +67,15 @@ int main(void)
     using Clock = std::chrono::steady_clock;
 
     static constexpr float ROTATION_SPEED_RAD_PER_SEC = 1.f;
+    static constexpr float CAMERA_SPEED_UNITS_PER_SEC = 3.f;
 
     std::size_t frameCount = 0;
     double drawTimeAccumulatedMs = 0.0;
     auto statsTimer = Clock::now();
+    auto lastFrameTime = Clock::now();
     const auto appStart = Clock::now();
+
+    k3::Math::Vector3f cameraPosition{0.f, 0.f, 5.f};
 
     while (window.isOpen()) {
         sf::Event event;
@@ -80,19 +84,39 @@ int main(void)
                 window.close();
         }
 
+        const auto frameNow = Clock::now();
+        const float deltaTime = std::chrono::duration<float>(frameNow - lastFrameTime).count();
+        lastFrameTime = frameNow;
+
+        // Camera displacement (world space, no rotation yet): ZQSD/WASD on the XZ plane, Space/Shift for height
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::W) || sf::Keyboard::isKeyPressed(sf::Keyboard::Z))
+            cameraPosition.z -= CAMERA_SPEED_UNITS_PER_SEC * deltaTime;
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::S))
+            cameraPosition.z += CAMERA_SPEED_UNITS_PER_SEC * deltaTime;
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::A) || sf::Keyboard::isKeyPressed(sf::Keyboard::Q))
+            cameraPosition.x -= CAMERA_SPEED_UNITS_PER_SEC * deltaTime;
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::D))
+            cameraPosition.x += CAMERA_SPEED_UNITS_PER_SEC * deltaTime;
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Space))
+            cameraPosition.y += CAMERA_SPEED_UNITS_PER_SEC * deltaTime;
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::LShift))
+            cameraPosition.y -= CAMERA_SPEED_UNITS_PER_SEC * deltaTime;
+
         engine.clear(k3::Math::Color::Grey);
 
         const float elapsedSinceStart = std::chrono::duration<float>(Clock::now() - appStart).count();
         const float rotationAngle = elapsedSinceStart * ROTATION_SPEED_RAD_PER_SEC;
 
+        // View = inverse of the camera's world transform, shared by every mesh in the scene.
+        const auto view = k3::Math::Matrix4::translate({-cameraPosition.x, -cameraPosition.y, -cameraPosition.z});
+        // Model = this mesh's own placement/animation in world space.
+        const auto model = k3::Math::Matrix4::rotateZX(rotationAngle) * k3::Math::Matrix4::rotateYZ(rotationAngle);
+
         const auto drawStart = Clock::now();
         engine.draw(
             cube,
             viewport,
-            k3::Math::Matrix4::perspective(0.01f, 10.f, M_PI / 3.f, WIDTH * 1.f / WIDTH)
-                * k3::Math::Matrix4::translate({0, 0, -5.f})
-                * k3::Math::Matrix4::rotateZX(rotationAngle)
-                * k3::Math::Matrix4::rotateYZ(rotationAngle),
+            k3::Math::Matrix4::perspective(0.01f, 10.f, M_PI / 3.f, WIDTH * 1.f / WIDTH) * view * model,
             k3::Rasterizer::Cull::CW
         );
         const auto drawEnd = Clock::now();
