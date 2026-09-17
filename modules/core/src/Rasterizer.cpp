@@ -45,6 +45,7 @@ void k3::Rasterizer::draw(
             i2 = mesh.indices[i2];
         }
 
+        // NOTE: Only with 2 plan , change to 24 after for 6 plans.
         Vertex vertices[12];
 
         vertices[0] = {transform * mesh.vertices[i0].asPoint(), mesh.colors[i0]};
