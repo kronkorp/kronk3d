@@ -21,6 +21,24 @@ namespace k3::Math
     };
 
     template<Numeric T>
+    inline Vector2<T> operator*(float s, const Vector2<T>& v)
+	{
+		return {s * v.x, s * v.y};
+	}
+
+    template<Numeric T>
+    inline Vector2<T> operator-(const Vector2<T>& v0, const Vector2<T>& v1)
+	{
+		return {v0.x - v1.x, v0.y - v1.y};
+	}
+
+    template<Numeric T>
+	inline Vector2<T> operator+(const Vector2<T>& v0, const Vector2<T>& v1)
+	{
+		return {v0.x + v1.x, v0.y + v1.y};
+	}
+
+    template<Numeric T>
     struct Vector4
     {
         T x{}, y{}, z{}, w{};

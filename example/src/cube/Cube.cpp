@@ -112,6 +112,7 @@ static size_t cube_indices[] =
 const k3::Mesh cube
 {
     std::vector<k3::Math::Vector3f>(std::begin(cube_positions), std::end(cube_positions)),
+    {},
     std::vector<k3::Math::Color>(std::begin(cube_colors), std::end(cube_colors)),
     std::vector<std::size_t>(std::begin(cube_indices), std::end(cube_indices)),
     36

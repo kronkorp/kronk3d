@@ -17,6 +17,7 @@ namespace k3
     struct Vertex
     {
         Math::Vector4f point;
+        Math::Vector2f uv;
         Math::Color    color;
     };
 

@@ -14,7 +14,8 @@ namespace k3
 
         Vertex v;
         v.point = (1.f - t) * v0.point + t * v1.point;
-        v.color = (1.f - t) * v0.color + t * v1.color;
+		v.uv    = (1.f - t) * v0.uv    + t * v1.uv;
+		v.color = (1.f - t) * v0.color + t * v1.color;
 
         return v;
     }

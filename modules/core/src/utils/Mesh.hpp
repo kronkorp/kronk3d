@@ -17,6 +17,7 @@ namespace k3
     struct Mesh
     {
         std::vector<Math::Vector3f> vertices;
+        std::vector<Math::Vector2f> uvs;
         std::vector<Math::Color>    colors;
         std::vector<std::size_t>    indices;
         std::size_t                 count;

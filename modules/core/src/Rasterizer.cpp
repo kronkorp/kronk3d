@@ -48,14 +48,11 @@ void k3::Rasterizer::draw(
         // NOTE: Only with 2 plan , change to 24 after for 6 plans.
         Vertex vertices[12];
 
-        vertices[0] = {transform * mesh.vertices[i0].asPoint(), mesh.colors[i0]};
-        vertices[1] = {transform * mesh.vertices[i1].asPoint(), mesh.colors[i1]};
-        vertices[2] = {transform * mesh.vertices[i2].asPoint(), mesh.colors[i2]};
+        vertices[0] = {transform * mesh.vertices[i0].asPoint(), {}, mesh.colors[i0]};
+        vertices[1] = {transform * mesh.vertices[i1].asPoint(), {}, mesh.colors[i1]};
+        vertices[2] = {transform * mesh.vertices[i2].asPoint(), {}, mesh.colors[i2]};
 
         auto clippedEnd = clip(vertices, vertices + 3);
-
-        // v0/v1/v2 are still in clip space here (pre perspective-divide) — this is where
-        // near-plane clipping against `w` will need to hook in, before drawSingleTriangle divides.
 
         for (auto begin = vertices; begin != clippedEnd; begin += 3) {
             auto v0 = begin[0];
