@@ -49,6 +49,11 @@ void k3::Rasterizer::draw(
         auto v1 = transform * mesh.vertices[i1].asPoint();
         auto v2 = transform * mesh.vertices[i2].asPoint();
 
+        // TODO: Perspective
+        v0 = k3::Math::Vector4f::Perspective(v0);
+        v1 = k3::Math::Vector4f::Perspective(v1);
+        v2 = k3::Math::Vector4f::Perspective(v2);
+
         v0 = viewport.applyTo(v0);
         v1 = viewport.applyTo(v1);
         v2 = viewport.applyTo(v2);

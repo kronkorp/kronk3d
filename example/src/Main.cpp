@@ -7,6 +7,7 @@
 #include "utils/Viewport.hpp"
 #include <algorithm>
 #include <cstdint>
+#include "cube/Cube.hpp"
 
 static sf::Image toImage(const std::vector<k3::Math::Color>& pixels, size_t width, size_t height)
 {
@@ -56,7 +57,7 @@ int main(void)
 
     k3::Viewport viewport{
         0,
-        WIDTH,
+        HEIGHT,
         0,
         HEIGHT
     };
@@ -68,13 +69,15 @@ int main(void)
                 window.close();
         }
 
-        engine.clear(k3::Math::Color::fromRGB(255, 0, 255));
+        engine.clear(k3::Math::Color::Grey);
         engine.draw(
-            mesh,
+            cube,
             viewport,
-            k3::Math::Matrix4::scale(0.5f)
-                * k3::Math::Matrix4::rotateXY(0.3f),
-            k3::Rasterizer::Cull::CCW
+            k3::Math::Matrix4::perspective(0.01f, 10.f, M_PI / 3.f, WIDTH * 1.f / WIDTH)
+                * k3::Math::Matrix4::translate({0, 0, -5.f})
+                * k3::Math::Matrix4::rotateZX(0.5f)
+                * k3::Math::Matrix4::rotateYZ(0.5f),
+            k3::Rasterizer::Cull::CW
         );
 
         window.clear(sf::Color::Black);

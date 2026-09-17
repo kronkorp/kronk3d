@@ -34,6 +34,15 @@ namespace k3::Math
         {
             return v0.x * v1.y - v0.y * v1.x;
         }
+
+        static inline Vector4<T> Perspective(Vector4<T> v)
+        {
+            v.x /= v.w;
+            v.y /= v.w;
+            v.z /= v.w;
+            return v;
+        }
+
     };
 
     template<Numeric T>
