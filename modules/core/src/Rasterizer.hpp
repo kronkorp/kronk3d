@@ -7,7 +7,7 @@
 
 #pragma once
 
-#include "Vector.hpp"
+#include "Color.hpp"
 #include "utils/Mesh.hpp"
 #include "utils/Viewport.hpp"
 #include <cstddef>
@@ -18,7 +18,7 @@ namespace k3
 
     class Rasterizer
     {
-        using FrameBuffer = std::vector<Math::Vector4f>;
+        using FrameBuffer = std::vector<Math::Color>;
         using DepthBuffer = std::vector<float>;
 
         public:
@@ -27,7 +27,7 @@ namespace k3
 
             void draw(const Mesh& mesh, const Viewport& viewport);
 
-            void clear(const Math::Vector4f& color) noexcept;
+            void clear(const Math::Color& color) noexcept;
 
             [[nodiscard]] const FrameBuffer& framebuffer(void) const noexcept;
 

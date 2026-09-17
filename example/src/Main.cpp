@@ -1,13 +1,14 @@
 #include <SFML/Graphics.hpp>
 #include <SFML/Graphics/Image.hpp>
 
+#include "Color.hpp"
 #include "Rasterizer.hpp"
 #include "Vector.hpp"
 
 #include <algorithm>
 #include <cstdint>
 
-static sf::Image toImage(const std::vector<k3::Math::Vector4f>& pixels, size_t width, size_t height)
+static sf::Image toImage(const std::vector<k3::Math::Color>& pixels, size_t width, size_t height)
 {
     sf::Image image;
     image.create(width, height, sf::Color::Black);
@@ -16,13 +17,13 @@ static sf::Image toImage(const std::vector<k3::Math::Vector4f>& pixels, size_t w
     {
         for (size_t x = 0; x < width; x++)
         {
-            const k3::Math::Vector4f& color = pixels[x + y * width];
+            const k3::Math::Color& color = pixels[x + y * width];
 
             image.setPixel(x, y, sf::Color(
-                static_cast<std::uint8_t>(std::clamp(color.x, 0.f, 1.f) * 255.f),
-                static_cast<std::uint8_t>(std::clamp(color.y, 0.f, 1.f) * 255.f),
-                static_cast<std::uint8_t>(std::clamp(color.z, 0.f, 1.f) * 255.f),
-                static_cast<std::uint8_t>(std::clamp(color.w, 0.f, 1.f) * 255.f)
+                static_cast<std::uint8_t>(std::clamp(color.r, 0.f, 1.f) * 255.f),
+                static_cast<std::uint8_t>(std::clamp(color.g, 0.f, 1.f) * 255.f),
+                static_cast<std::uint8_t>(std::clamp(color.b, 0.f, 1.f) * 255.f),
+                static_cast<std::uint8_t>(std::clamp(color.a, 0.f, 1.f) * 255.f)
             ));
         }
     }
@@ -48,7 +49,7 @@ int main(void)
                 window.close();
         }
 
-        engine.clear(k3::Math::Vector4f(1.f, 1.f, 1.f, 1.f));
+        engine.clear(k3::Math::Color::fromRGB(255, 0, 255));
 
         // engine.draw();
 

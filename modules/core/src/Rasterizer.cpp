@@ -35,7 +35,7 @@ const k3::Rasterizer::FrameBuffer& k3::Rasterizer::framebuffer(void) const noexc
 }
 
 void k3::Rasterizer::clear(
-    const k3::Math::Vector4f& color
+    const k3::Math::Color& color
 ) noexcept
 {
     std::fill_n(this->m_frameBuffer.begin(), this->m_frameBuffer.size(), color);
