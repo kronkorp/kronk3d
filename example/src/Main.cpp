@@ -119,6 +119,7 @@ int main(void)
             k3::Math::Matrix4::perspective(0.01f, 10.f, M_PI / 3.f, WIDTH * 1.f / WIDTH) * view * model,
             k3::Rasterizer::Cull::CW
         );
+
         const auto drawEnd = Clock::now();
         drawTimeAccumulatedMs += std::chrono::duration<double, std::milli>(drawEnd - drawStart).count();
 

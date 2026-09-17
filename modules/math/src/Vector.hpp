@@ -37,13 +37,36 @@ namespace k3::Math
 
         static inline Vector4<T> Perspective(Vector4<T> v)
         {
+            // v.w = 1.f / v.w;
             v.x /= v.w;
             v.y /= v.w;
             v.z /= v.w;
             return v;
         }
 
+        static inline float dot(const Vector4<T>& v1, const Vector4<T>& v2)
+        {
+            return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z + v1.w * v2.w;
+        }
     };
+
+    template<Numeric T>
+    inline Vector4<T> operator*(float s, const Vector4<T>& v)
+	{
+		return {s * v.x, s * v.y, s * v.z, s * v.w};
+	}
+
+    template<Numeric T>
+    inline Vector4<T> operator-(const Vector4<T>& v0, const Vector4<T>& v1)
+	{
+		return {v0.x - v1.x, v0.y - v1.y, v0.z - v1.z, v0.w - v1.w};
+	}
+
+    template<Numeric T>
+	inline Vector4<T> operator+(const Vector4<T>& v0, const Vector4<T>& v1)
+	{
+		return {v0.x + v1.x, v0.y + v1.y, v0.z + v1.z, v0.w + v1.w};
+	}
 
     template<Numeric T>
     struct Vector3

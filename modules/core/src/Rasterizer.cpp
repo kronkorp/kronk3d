@@ -10,6 +10,7 @@
 #include "Matrix.hpp"
 #include "Vector.hpp"
 #include "utils/Mesh.hpp"
+#include "utils/Vertex.hpp"
 #include "utils/Viewport.hpp"
 #include <algorithm>
 #include <cmath>
@@ -44,37 +45,44 @@ void k3::Rasterizer::draw(
             i2 = mesh.indices[i2];
         }
 
-        const auto v0 = transform * mesh.vertices[i0].asPoint();
-        const auto v1 = transform * mesh.vertices[i1].asPoint();
-        const auto v2 = transform * mesh.vertices[i2].asPoint();
+        Vertex vertices[12];
+
+        vertices[0] = {transform * mesh.vertices[i0].asPoint(), mesh.colors[i0]};
+        vertices[1] = {transform * mesh.vertices[i1].asPoint(), mesh.colors[i1]};
+        vertices[2] = {transform * mesh.vertices[i2].asPoint(), mesh.colors[i2]};
+
+        auto clippedEnd = clip(vertices, vertices + 3);
 
         // v0/v1/v2 are still in clip space here (pre perspective-divide) — this is where
         // near-plane clipping against `w` will need to hook in, before drawSingleTriangle divides.
 
-        this->drawSingleTriangle(v0, v1, v2, mesh.colors[i0], mesh.colors[i1], mesh.colors[i2], viewport, culling);
+        for (auto begin = vertices; begin != clippedEnd; begin += 3) {
+            auto v0 = begin[0];
+            auto v1 = begin[1];
+            auto v2 = begin[2];
+
+            this->drawSingleTriangle(v0, v1, v2, viewport, culling);
+        }
     }
 }
 
 void k3::Rasterizer::drawSingleTriangle(
-    k3::Math::Vector4f v0,
-    k3::Math::Vector4f v1,
-    k3::Math::Vector4f v2,
-    const k3::Math::Color& c0,
-    const k3::Math::Color& c1,
-    const k3::Math::Color& c2,
+    k3::Vertex v0,
+    k3::Vertex v1,
+    k3::Vertex v2,
     const k3::Viewport& viewport,
     Cull culling
 )
 {
-    v0 = Math::Vector4f::Perspective(v0);
-    v1 = Math::Vector4f::Perspective(v1);
-    v2 = Math::Vector4f::Perspective(v2);
+    v0.point = Math::Vector4f::Perspective(v0.point);
+    v1.point = Math::Vector4f::Perspective(v1.point);
+    v2.point = Math::Vector4f::Perspective(v2.point);
 
-    v0 = viewport.applyTo(v0);
-    v1 = viewport.applyTo(v1);
-    v2 = viewport.applyTo(v2);
+    v0.point = viewport.applyTo(v0.point);
+    v1.point = viewport.applyTo(v1.point);
+    v2.point = viewport.applyTo(v2.point);
 
-    auto det012 = Math::Vector4f::det(v1 - v0, v2 - v0);
+    auto det012 = Math::Vector4f::det(v1.point - v0.point, v2.point - v0.point);
     bool isCCW = det012 < 0.f;
 
     switch (culling) {
@@ -97,13 +105,13 @@ void k3::Rasterizer::drawSingleTriangle(
 
     this->computeBoundingBox(v0, v1, v2, viewport, xmin, xmax, ymin, ymax);
 
-    this->rasterizeTriangle(v0, v1, v2, c0, c1, c2, det012, xmin, xmax, ymin, ymax);
+    this->rasterizeTriangle(v0, v1, v2, det012, xmin, xmax, ymin, ymax);
 }
 
 void k3::Rasterizer::computeBoundingBox(
-    const k3::Math::Vector4f& v0,
-    const k3::Math::Vector4f& v1,
-    const k3::Math::Vector4f& v2,
+    const k3::Vertex& v0,
+    const k3::Vertex& v1,
+    const k3::Vertex& v2,
     const k3::Viewport& viewport,
     std::int32_t& xmin,
     std::int32_t& xmax,
@@ -116,19 +124,16 @@ void k3::Rasterizer::computeBoundingBox(
     ymin = std::max<std::int32_t>(viewport.ymin, 0);
     ymax = std::min<std::int32_t>(viewport.ymax, m_height) - 1;
 
-    xmin = std::max<float>(std::min({std::floor(v0.x), std::floor(v1.x), std::floor(v2.x)}), xmin);
-    xmax = std::min<float>(std::max({std::floor(v0.x), std::floor(v1.x), std::floor(v2.x)}), xmax);
-    ymin = std::max<float>(std::min({std::floor(v0.y), std::floor(v1.y), std::floor(v2.y)}), ymin);
-    ymax = std::min<float>(std::max({std::floor(v0.y), std::floor(v1.y), std::floor(v2.y)}), ymax);
+    xmin = std::max<float>(std::min({std::floor(v0.point.x), std::floor(v1.point.x), std::floor(v2.point.x)}), xmin);
+    xmax = std::min<float>(std::max({std::floor(v0.point.x), std::floor(v1.point.x), std::floor(v2.point.x)}), xmax);
+    ymin = std::max<float>(std::min({std::floor(v0.point.y), std::floor(v1.point.y), std::floor(v2.point.y)}), ymin);
+    ymax = std::min<float>(std::max({std::floor(v0.point.y), std::floor(v1.point.y), std::floor(v2.point.y)}), ymax);
 }
 
 void k3::Rasterizer::rasterizeTriangle(
-    const k3::Math::Vector4f& v0,
-    const k3::Math::Vector4f& v1,
-    const k3::Math::Vector4f& v2,
-    const k3::Math::Color& c0,
-    const k3::Math::Color& c1,
-    const k3::Math::Color& c2,
+    const k3::Vertex& v0,
+    const k3::Vertex& v1,
+    const k3::Vertex& v2,
     float det012,
     std::int32_t xmin,
     std::int32_t xmax,
@@ -140,14 +145,18 @@ void k3::Rasterizer::rasterizeTriangle(
         for (auto x = xmin; x <= xmax; ++x) {
             Math::Vector4f p{x + 0.5f, y + 0.5f, 0.f, 0.f};
 
-            float det01 = Math::Vector4f::det(v1 - v0, p - v0);
-            float det12 = Math::Vector4f::det(v2 - v1, p - v1);
-            float det20 = Math::Vector4f::det(v0 - v2, p - v2);
+            float det01 = Math::Vector4f::det(v1.point - v0.point, p - v0.point);
+            float det12 = Math::Vector4f::det(v2.point - v1.point, p - v1.point);
+            float det20 = Math::Vector4f::det(v0.point - v2.point, p - v2.point);
 
             if (det01 >= 0.f && det12 >= 0.f && det20 >= 0.f) {
                 float l0 = det12 / det012;
                 float l1 = det20 / det012;
                 float l2 = det01 / det012;
+
+                auto c0 = v0.color;
+                auto c1 = v1.color;
+                auto c2 = v2.color;
 
                 this->pixel(x, y) = Math::Color(
                     l0 * c0.r + l1 * c1.r + l2 * c2.r,
