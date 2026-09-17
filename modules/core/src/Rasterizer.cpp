@@ -7,6 +7,7 @@
 
 #include "Rasterizer.hpp"
 #include "Color.hpp"
+#include "Matrix.hpp"
 #include "Vector.hpp"
 #include "utils/Mesh.hpp"
 #include "utils/Viewport.hpp"
@@ -26,7 +27,9 @@ k3::Rasterizer::Rasterizer(
 
 void k3::Rasterizer::draw(
     const k3::Mesh& mesh,
-    const k3::Viewport& viewport
+    const k3::Viewport& viewport,
+    const k3::Math::Matrix4& transform,
+    [[maybe_unused]] Cull culling
 )
 {
     for (size_t vertex = 0; vertex + 2 < mesh.count; vertex += 3) {
@@ -42,9 +45,9 @@ void k3::Rasterizer::draw(
         }
 
         // Vector getting
-        auto v0 = mesh.vertices[i0];
-        auto v1 = mesh.vertices[i1];
-        auto v2 = mesh.vertices[i2];
+        auto v0 = transform * mesh.vertices[i0].asPoint();
+        auto v1 = transform * mesh.vertices[i1].asPoint();
+        auto v2 = transform * mesh.vertices[i2].asPoint();
 
         v0 = viewport.applyTo(v0);
         v1 = viewport.applyTo(v1);

@@ -1,6 +1,7 @@
 #include <SFML/Graphics.hpp>
 #include <SFML/Graphics/Image.hpp>
 #include "Color.hpp"
+#include "Matrix.hpp"
 #include "Rasterizer.hpp"
 #include "utils/Mesh.hpp"
 #include "utils/Viewport.hpp"
@@ -68,7 +69,12 @@ int main(void)
         }
 
         engine.clear(k3::Math::Color::fromRGB(255, 0, 255));
-        engine.draw(mesh, viewport);
+        engine.draw(
+            mesh,
+            viewport,
+            k3::Math::Matrix4::scale(0.5f)
+                * k3::Math::Matrix4::rotateXY(0.3f)
+        );
 
         window.clear(sf::Color::Black);
 

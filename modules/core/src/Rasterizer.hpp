@@ -8,6 +8,7 @@
 #pragma once
 
 #include "Color.hpp"
+#include "Matrix.hpp"
 #include "utils/Mesh.hpp"
 #include "utils/Viewport.hpp"
 #include <cstddef>
@@ -21,11 +22,17 @@ namespace k3
         using FrameBuffer = std::vector<Math::Color>;
         using DepthBuffer = std::vector<float>;
 
+        enum class Cull {
+            None,
+            CW,
+            CCW
+        };
+
         public:
             Rasterizer(std::size_t width, std::size_t height);
             ~Rasterizer() = default;
 
-            void draw(const Mesh& mesh, const Viewport& viewport);
+            void draw(const Mesh& mesh, const Viewport& viewport, const Math::Matrix4& transform = Math::Matrix4::identity(), Cull culling = Cull::CW);
 
             void clear(const Math::Color& color) noexcept;
 

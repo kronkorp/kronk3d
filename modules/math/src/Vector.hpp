@@ -21,12 +21,6 @@ namespace k3::Math
     };
 
     template<Numeric T>
-    struct Vector3
-    {
-        T x{}, y{}, z{};
-    };
-
-    template<Numeric T>
     struct Vector4
     {
         T x{}, y{}, z{}, w{};
@@ -39,6 +33,22 @@ namespace k3::Math
         static inline float det(const Vector4<T>& v0, const Vector4<T>& v1)
         {
             return v0.x * v1.y - v0.y * v1.x;
+        }
+    };
+
+    template<Numeric T>
+    struct Vector3
+    {
+        T x{}, y{}, z{};
+
+        inline Vector4<T> asVector() const
+        {
+            return Vector4<T>(x, y, z, 0.f);
+        }
+
+        inline Vector4<T> asPoint() const
+        {
+            return Vector4<T>(x, y, z, 1.f);
         }
     };
 
