@@ -6,7 +6,6 @@
 */
 
 #include "Rasterizer.hpp"
-#include "Vector.hpp"
 #include "utils/Mesh.hpp"
 #include "utils/Viewport.hpp"
 #include <algorithm>
@@ -17,7 +16,7 @@ k3::Rasterizer::Rasterizer(
     std::size_t height
 ) : m_frameBuffer(width * height), m_depthBuffer(width * height)
 {
-    // this->m_frameBuffer.reserve(width * height);
+    // To impl
 }
 
 void k3::Rasterizer::draw(
@@ -25,7 +24,20 @@ void k3::Rasterizer::draw(
     [[maybe_unused]] const k3::Viewport& viewport
 )
 {
-    // To implement
+    for (size_t vertex = 0; vertex + 2 < mesh.count; vertex += 3) {
+        auto i0 = vertex + 0;
+        auto i1 = vertex + 1;
+        auto i2 = vertex + 2;
+
+        // If mesh.indices, then there is reusable vertexs
+        if (!mesh.indices.empty()) {
+            i0 = mesh.indices[i0];
+            i1 = mesh.indices[i1];
+            i2 = mesh.indices[i2];
+        }
+
+        auto v0 ) 
+    }
 }
 
 [[nodiscard]]

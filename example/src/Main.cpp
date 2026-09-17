@@ -3,6 +3,7 @@
 #include "Color.hpp"
 #include "Rasterizer.hpp"
 #include "utils/Mesh.hpp"
+#include "utils/Viewport.hpp"
 #include <algorithm>
 #include <cstdint>
 
@@ -46,9 +47,16 @@ int main(void)
             {0.5f, 0.5f},
             {0.f, -0.5f}
         },
-        .colors = {},
+        .colors = {k3::Math::Color::Blue, k3::Math::Color::Red, k3::Math::Color::Green},
         .indices = {1, 2, 3},
-        .count = 1
+        .count = 3  // 3 segment
+    };
+
+    k3::Viewport viewport{
+        0,
+        WIDTH,
+        0,
+        HEIGHT
     };
 
     while (window.isOpen()) {
@@ -60,7 +68,7 @@ int main(void)
 
         engine.clear(k3::Math::Color::fromRGB(255, 0, 255));
 
-        // engine.draw();
+        engine.draw(mesh, viewport);
 
         window.clear(sf::Color::Black);
 

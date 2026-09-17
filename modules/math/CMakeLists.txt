@@ -3,9 +3,12 @@ project(kronk3d LANGUAGES CXX)
 
 ###
 
-add_library(math INTERFACE)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+file(GLOB_RECURSE SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
+
+add_library(math STATIC ${SOURCES})
+apply_project_settings(math)
 
 ###
 
-target_link_libraries(math INTERFACE KRONK3D_OPTIONS)
-target_include_directories(math INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/src/)
+target_include_directories(math PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/)
