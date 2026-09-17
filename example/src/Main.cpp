@@ -66,9 +66,12 @@ int main(void)
 
     using Clock = std::chrono::steady_clock;
 
+    static constexpr float ROTATION_SPEED_RAD_PER_SEC = 1.f;
+
     std::size_t frameCount = 0;
     double drawTimeAccumulatedMs = 0.0;
     auto statsTimer = Clock::now();
+    const auto appStart = Clock::now();
 
     while (window.isOpen()) {
         sf::Event event;
@@ -79,14 +82,17 @@ int main(void)
 
         engine.clear(k3::Math::Color::Grey);
 
+        const float elapsedSinceStart = std::chrono::duration<float>(Clock::now() - appStart).count();
+        const float rotationAngle = elapsedSinceStart * ROTATION_SPEED_RAD_PER_SEC;
+
         const auto drawStart = Clock::now();
         engine.draw(
             cube,
             viewport,
             k3::Math::Matrix4::perspective(0.01f, 10.f, M_PI / 3.f, WIDTH * 1.f / WIDTH)
                 * k3::Math::Matrix4::translate({0, 0, -5.f})
-                * k3::Math::Matrix4::rotateZX(0.5f)
-                * k3::Math::Matrix4::rotateYZ(0.5f),
+                * k3::Math::Matrix4::rotateZX(rotationAngle)
+                * k3::Math::Matrix4::rotateYZ(rotationAngle),
             k3::Rasterizer::Cull::CW
         );
         const auto drawEnd = Clock::now();
