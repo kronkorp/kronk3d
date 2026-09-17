@@ -20,6 +20,12 @@ namespace k3
         static const Color Green;
         static const Color Yellow;
         static const Color White;
+
     };
+
+    inline Color operator*(const Color& color, float t)
+    {
+        return Color(color.r * t, color.g * t, color.b * t, color.a);
+    }
 
 }

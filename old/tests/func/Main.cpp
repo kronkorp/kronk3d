@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <iostream>
 #include <ostream>
+#include <string>
 #include <vector>
 
 static sf::Image toImage(const std::vector<k3::Color>& pixels, size_t width, size_t height)
@@ -50,11 +51,24 @@ int main(void)
 
     sf::RenderWindow window(sf::VideoMode(core.viewWidth(), core.viewHeight()), "kronk3d");
 
+    sf::Font font;
+    bool hasFont = font.loadFromFile("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf");
+
+    sf::Text fpsText;
+    fpsText.setFont(font);
+    fpsText.setCharacterSize(18);
+    fpsText.setFillColor(sf::Color::Red);
+    fpsText.setPosition(8.f, 8.f);
+
     sf::Clock clock;
+    sf::Clock fpsClock;
+    unsigned int frameCount = 0;
+    float fps = 0.f;
 
     while (window.isOpen())
     {
         sf::Event event;
+
         while (window.pollEvent(event))
         {
             if (event.type == sf::Event::Closed)
@@ -69,11 +83,11 @@ int main(void)
         core.draw(
             cube,
             viewport,
-            k3::Matrix4::scale(0.5f)
-                * k3::Matrix4::scale({600 * 1.f / 800, 1.f, 1.f})
+            k3::Matrix4::perspective(0.01f, 10.f, M_PI / 3.f, 800 * 1.f / 600)
+                * k3::Matrix4::translate({0.f, 0.f, -5.f})
                 * k3::Matrix4::rotateZX(angle)
                 * k3::Matrix4::rotateXY(angle * 1.61f),
-            k3::Rasterizer::Cull::CW
+            k3::Rasterizer::Cull::CCW
         );
 
         std::chrono::high_resolution_clock::duration a = std::chrono::high_resolution_clock::now().time_since_epoch() - point;
@@ -82,8 +96,19 @@ int main(void)
         sf::Image image = toImage(core.framebuffer(), core.viewWidth(), core.viewHeight());
         texture.update(image);
 
+        frameCount++;
+        if (fpsClock.getElapsedTime().asSeconds() >= 1.f)
+        {
+            fps = frameCount / fpsClock.getElapsedTime().asSeconds();
+            frameCount = 0;
+            fpsClock.restart();
+        }
+        fpsText.setString("FPS: " + std::to_string(static_cast<int>(fps)));
+
         window.clear();
         window.draw(sprite);
+        if (hasFont)
+            window.draw(fpsText);
         window.display();
     }
 
