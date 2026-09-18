@@ -151,26 +151,20 @@ void k3::Rasterizer::rasterizeTriangle(
             float det20 = Math::Vector4f::det(v0.point - v2.point, p - v2.point);
 
             if (det01 >= 0.f && det12 >= 0.f && det20 >= 0.f) {
-                float l0 = det12 / det012;
-                float l1 = det20 / det012;
-                float l2 = det01 / det012;
+                float l0 = det12 / det012 / v0.point.w;
+                float l1 = det20 / det012 / v1.point.w;
+                float l2 = det01 / det012 / v2.point.w;
+                float lsum = l0 + l1 + l2;
 
-                auto c0 = v2.color;
-                auto c1 = v1.color;
-                auto c2 = v2.color;
+                l0 /= lsum;
+                l1 /= lsum;
+                l2 /= lsum;
 
                 k3::Math::Vector2f uv = {l0 * v0.uv + l1 * v1.uv + l2 * v2.uv};
                 auto& color = texture.at(
                     static_cast<size_t>(uv.x * texture.width),
                     static_cast<size_t>(uv.y * texture.height)
                 );
-
-                // this->pixel(x, y) = Math::Color(
-                //     l0 * c0.r + l1 * c1.r + l2 * c2.r,
-                //     l0 * c0.g + l1 * c1.g + l2 * c2.g,
-                //     l0 * c0.b + l1 * c1.b + l2 * c2.b,
-                //     l0 * c0.a + l1 * c1.a + l2 * c2.a
-                // );
 
                 this->pixel(x, y) = color;;
             }
