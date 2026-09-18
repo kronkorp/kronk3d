@@ -12,6 +12,7 @@
 #include "utils/Mesh.hpp"
 #include "utils/Vertex.hpp"
 #include "utils/Viewport.hpp"
+#include "utils/texture/Texture.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -47,6 +48,7 @@ namespace k3
             // Perspective divide, viewport transform, backface culling, then hands off to setup + rasterization.
             void drawSingleTriangle(
                 Vertex v0, Vertex v1, Vertex v2,
+                const Texture& texture,
                 const Viewport& viewport, Cull culling
             );
 
@@ -60,6 +62,7 @@ namespace k3
             // Edge-function scan of the bounding box: barycentric test + color interpolation + pixel write.
             void rasterizeTriangle(
                 const Vertex& v0, const Vertex& v1, const Vertex& v2,
+                const Texture& texture,
                 float det012,
                 std::int32_t xmin, std::int32_t xmax, std::int32_t ymin, std::int32_t ymax
             );

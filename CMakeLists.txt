@@ -6,7 +6,7 @@ include(cmake/CompilerOptions.cmake)
 include(cmake/Utils.cmake)
 
 add_subdirectory(modules/math)
-# add_subdirectory(modules/api)
+add_subdirectory(modules/api)
 add_subdirectory(modules/logger)
 add_subdirectory(modules/core)
 

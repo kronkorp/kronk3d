@@ -12,6 +12,7 @@
 #include "utils/Mesh.hpp"
 #include "utils/Vertex.hpp"
 #include "utils/Viewport.hpp"
+#include "utils/texture/Texture.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
@@ -48,9 +49,9 @@ void k3::Rasterizer::draw(
         // NOTE: Only with 2 plan , change to 24 after for 6 plans.
         Vertex vertices[12];
 
-        vertices[0] = {transform * mesh.vertices[i0].asPoint(), {}, mesh.colors[i0]};
-        vertices[1] = {transform * mesh.vertices[i1].asPoint(), {}, mesh.colors[i1]};
-        vertices[2] = {transform * mesh.vertices[i2].asPoint(), {}, mesh.colors[i2]};
+        vertices[0] = {transform * mesh.vertices[i0].asPoint(), mesh.uvs[i0], mesh.colors[i0]};
+        vertices[1] = {transform * mesh.vertices[i1].asPoint(), mesh.uvs[i1], mesh.colors[i1]};
+        vertices[2] = {transform * mesh.vertices[i2].asPoint(), mesh.uvs[i2], mesh.colors[i2]};
 
         auto clippedEnd = clip(vertices, vertices + 3);
 
@@ -59,7 +60,7 @@ void k3::Rasterizer::draw(
             auto v1 = begin[1];
             auto v2 = begin[2];
 
-            this->drawSingleTriangle(v0, v1, v2, viewport, culling);
+            this->drawSingleTriangle(v0, v1, v2, mesh.texture, viewport, culling);
         }
     }
 }
@@ -68,6 +69,7 @@ void k3::Rasterizer::drawSingleTriangle(
     k3::Vertex v0,
     k3::Vertex v1,
     k3::Vertex v2,
+    const Texture& texture,
     const k3::Viewport& viewport,
     Cull culling
 )
@@ -103,7 +105,7 @@ void k3::Rasterizer::drawSingleTriangle(
 
     this->computeBoundingBox(v0, v1, v2, viewport, xmin, xmax, ymin, ymax);
 
-    this->rasterizeTriangle(v0, v1, v2, det012, xmin, xmax, ymin, ymax);
+    this->rasterizeTriangle(v0, v1, v2, texture, det012, xmin, xmax, ymin, ymax);
 }
 
 void k3::Rasterizer::computeBoundingBox(
@@ -132,6 +134,7 @@ void k3::Rasterizer::rasterizeTriangle(
     const k3::Vertex& v0,
     const k3::Vertex& v1,
     const k3::Vertex& v2,
+    const Texture& texture,
     float det012,
     std::int32_t xmin,
     std::int32_t xmax,
@@ -152,16 +155,24 @@ void k3::Rasterizer::rasterizeTriangle(
                 float l1 = det20 / det012;
                 float l2 = det01 / det012;
 
-                auto c0 = v0.color;
+                auto c0 = v2.color;
                 auto c1 = v1.color;
                 auto c2 = v2.color;
 
-                this->pixel(x, y) = Math::Color(
-                    l0 * c0.r + l1 * c1.r + l2 * c2.r,
-                    l0 * c0.g + l1 * c1.g + l2 * c2.g,
-                    l0 * c0.b + l1 * c1.b + l2 * c2.b,
-                    l0 * c0.a + l1 * c1.a + l2 * c2.a
+                k3::Math::Vector2f uv = {l0 * v0.uv + l1 * v1.uv + l2 * v2.uv};
+                auto& color = texture.at(
+                    static_cast<size_t>(uv.x * texture.width),
+                    static_cast<size_t>(uv.y * texture.height)
                 );
+
+                // this->pixel(x, y) = Math::Color(
+                //     l0 * c0.r + l1 * c1.r + l2 * c2.r,
+                //     l0 * c0.g + l1 * c1.g + l2 * c2.g,
+                //     l0 * c0.b + l1 * c1.b + l2 * c2.b,
+                //     l0 * c0.a + l1 * c1.a + l2 * c2.a
+                // );
+
+                this->pixel(x, y) = color;;
             }
         }
     }

@@ -8,6 +8,7 @@
 
 #include "Color.hpp"
 #include "Vector.hpp"
+#include "utils/texture/Texture.hpp"
 #include <algorithm>
 #include <cstdint>
 

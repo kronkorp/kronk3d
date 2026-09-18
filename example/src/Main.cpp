@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <format>
 #include "cube/Cube.hpp"
+#include "cube/CubeTextured.hpp"
 
 static sf::Image toImage(const std::vector<k3::Math::Color>& pixels, size_t width, size_t height)
 {
@@ -45,17 +46,17 @@ int main(void)
     sf::Texture texture;
     sf::Sprite sprite;
 
-    k3::Mesh mesh{
-        .vertices = {
-            {-0.5f, -0.5f, 0.f},
-            {-0.5f, 0.5f, 0.f},
-            {0.5f, -0.5f, 0.f},
-            {0.5f, 0.5f, 0.f},
-        },
-        .colors = {k3::Math::Color::Red, k3::Math::Color::Blue, k3::Math::Color::Green, k3::Math::Color::Yellow},
-        .indices = {0, 1, 2, 2, 1, 3},
-        .count = 6  // 3 segment
-    };
+    // k3::Mesh mesh{
+    //     .vertices = {
+    //         {-0.5f, -0.5f, 0.f},
+    //         {-0.5f, 0.5f, 0.f},
+    //         {0.5f, -0.5f, 0.f},
+    //         {0.5f, 0.5f, 0.f},
+    //     },
+    //     .colors = {k3::Math::Color::Red, k3::Math::Color::Blue, k3::Math::Color::Green, k3::Math::Color::Yellow},
+    //     .indices = {0, 1, 2, 2, 1, 3},
+    //     .count = 6  // 3 segment
+    // };
 
     k3::Viewport viewport{
         0,
@@ -102,7 +103,7 @@ int main(void)
         if (sf::Keyboard::isKeyPressed(sf::Keyboard::LShift))
             cameraPosition.y -= CAMERA_SPEED_UNITS_PER_SEC * deltaTime;
 
-        engine.clear(k3::Math::Color::Grey);
+        engine.clear(k3::Math::Color::fromRGB(22, 22, 22));
 
         const float elapsedSinceStart = std::chrono::duration<float>(Clock::now() - appStart).count();
         const float rotationAngle = elapsedSinceStart * ROTATION_SPEED_RAD_PER_SEC;
@@ -114,7 +115,7 @@ int main(void)
 
         const auto drawStart = Clock::now();
         engine.draw(
-            cube,
+            cubeTextured,
             viewport,
             k3::Math::Matrix4::perspective(0.01f, 10.f, M_PI / 3.f, WIDTH * 1.f / WIDTH) * view * model,
             k3::Rasterizer::Cull::CW

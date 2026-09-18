@@ -7,6 +7,7 @@
 #pragma once
 
 #include "Color.hpp"
+#include "utils/texture/Texture.hpp"
 #include <cstddef>
 #include <vector>
 #include <Vector.hpp>
@@ -21,6 +22,8 @@ namespace k3
         std::vector<Math::Color>    colors;
         std::vector<std::size_t>    indices;
         std::size_t                 count;
+
+        Texture                     texture{};
     };
 
 }
