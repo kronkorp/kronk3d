@@ -118,7 +118,7 @@ int main(void)
             cubeTextured,
             viewport,
             k3::Math::Matrix4::perspective(0.01f, 10.f, M_PI / 3.f, WIDTH * 1.f / WIDTH) * view * model,
-            k3::Rasterizer::Cull::CW
+            k3::Rasterizer::Cull::None
         );
 
         const auto drawEnd = Clock::now();

@@ -23,7 +23,7 @@ namespace k3
     class Rasterizer
     {
         using FrameBuffer = std::vector<Math::Color>;
-        using DepthBuffer = std::vector<float>;
+        using DepthBuffer = std::vector<std::uint32_t>;
 
         public:
             Rasterizer(std::size_t width, std::size_t height);

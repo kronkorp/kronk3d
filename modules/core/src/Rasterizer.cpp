@@ -160,6 +160,18 @@ void k3::Rasterizer::rasterizeTriangle(
                 l1 /= lsum;
                 l2 /= lsum;
 
+                if (!m_depthBuffer.empty() && m_depthBuffer.size() == (m_width * m_height)) {
+                    float z = l0 * v0.point.z + l1 * v1.point.z + l2 * v2.point.z;
+
+                    // Convert from [-1, 1] to [0, UINT32_MAX]
+                    std::uint32_t depth = (0.5f + 0.5f * z) * std::uint32_t(-1);
+                    auto& old_depth = m_depthBuffer[y * m_width + x];
+                    if (depth > old_depth) {
+                        continue;
+                    }
+                    old_depth = depth;
+                }
+
                 k3::Math::Vector2f uv = {l0 * v0.uv + l1 * v1.uv + l2 * v2.uv};
                 auto& color = texture.at(
                     static_cast<size_t>(uv.x * texture.width),
@@ -183,6 +195,7 @@ void k3::Rasterizer::clear(
 ) noexcept
 {
     std::fill_n(this->m_frameBuffer.begin(), this->m_frameBuffer.size(), color);
+    std::fill_n(this->m_depthBuffer.begin(), this->m_depthBuffer.size(), -1);
 }
 
 [[nodiscard]]
