@@ -1,8 +1,13 @@
 # IDE Folders
 .vscode/
+.cache/
 
 # Build
 build/
+*.out
 
 # Jsons
 compile_commands.json
+
+# Images
+*.bmp
