@@ -34,11 +34,13 @@ endif()
 
 ###
 
-file(GLOB_RECURSE HEADERS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.hpp)
-
 install(TARGETS kronk3d_shared kronk3d_static
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
-install(FILES ${HEADERS} DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/kronk3d)
+# Keep the folder layout: headers include each other as "scene/Mesh.hpp", "io/ObjLoader.hpp"...
+install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/ ${CMAKE_CURRENT_SOURCE_DIR}/../math/src/
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/kronk3d
+    FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h"
+)
