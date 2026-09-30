@@ -2,7 +2,6 @@
 
 #include "LoggerLevel.hpp"
 #include "handler/base/IHandler.hpp"
-#include <endian.h>
 #include <fstream>
 #include <memory>
 #include <ostream>
