@@ -6,11 +6,17 @@ include(cmake/CompilerOptions.cmake)
 include(cmake/Utils.cmake)
 
 option(K3_BUILD_EXAMPLES "Build the kronk3d example (needs SFML, fetched if not installed)" ${PROJECT_IS_TOP_LEVEL})
+option(K3_BUILD_TESTS "Build the kronk3d unit tests" ${PROJECT_IS_TOP_LEVEL})
 
 add_subdirectory(modules/math)
 add_subdirectory(modules/api)
 add_subdirectory(modules/logger)
 add_subdirectory(modules/core)
+
+if (K3_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(modules/test)
+endif()
 
 if (K3_BUILD_EXAMPLES)
     add_subdirectory(example)
