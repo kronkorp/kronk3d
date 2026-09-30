@@ -6,6 +6,7 @@
 */
 #pragma once
 
+#include <cmath>
 #include <type_traits>
 
 namespace k3::Math
@@ -24,6 +25,12 @@ namespace k3::Math
     inline Vector2<T> operator*(float s, const Vector2<T>& v)
 	{
 		return {s * v.x, s * v.y};
+	}
+
+    template<Numeric T>
+    inline Vector2<T> operator*(const Vector2<T>& v, float s)
+	{
+		return {v.x * s, v.y * s};
 	}
 
     template<Numeric T>
@@ -95,7 +102,78 @@ namespace k3::Math
         {
             return Vector4<T>(x, y, z, 1.f);
         }
+
+        static inline T dot(const Vector3<T>& v1, const Vector3<T>& v2)
+        {
+            return v1.x * v2.x + v1.y * v2.y + v1.z * v2.z;
+        }
+
+        static inline Vector3<T> cross(const Vector3<T>& v1, const Vector3<T>& v2)
+        {
+            return {
+                v1.y * v2.z - v1.z * v2.y,
+                v1.z * v2.x - v1.x * v2.z,
+                v1.x * v2.y - v1.y * v2.x,
+            };
+        }
+
+        static inline T length(const Vector3<T>& v)
+        {
+            return std::sqrt(dot(v, v));
+        }
+
+        // Zero-length vectors are returned untouched instead of producing NaNs.
+        static inline Vector3<T> normalize(const Vector3<T>& v)
+        {
+            T len = length(v);
+            return len > T(0) ? Vector3<T>{v.x / len, v.y / len, v.z / len} : v;
+        }
     };
+
+    template<Numeric T>
+    inline Vector3<T> operator*(float s, const Vector3<T>& v)
+	{
+		return {s * v.x, s * v.y, s * v.z};
+	}
+
+    template<Numeric T>
+    inline Vector3<T> operator*(const Vector3<T>& v, float s)
+	{
+		return {v.x * s, v.y * s, v.z * s};
+	}
+
+    template<Numeric T>
+    inline Vector3<T> operator/(const Vector3<T>& v, float s)
+	{
+		return {v.x / s, v.y / s, v.z / s};
+	}
+
+    template<Numeric T>
+    inline Vector3<T> operator-(const Vector3<T>& v0, const Vector3<T>& v1)
+	{
+		return {v0.x - v1.x, v0.y - v1.y, v0.z - v1.z};
+	}
+
+    template<Numeric T>
+    inline Vector3<T> operator-(const Vector3<T>& v)
+	{
+		return {-v.x, -v.y, -v.z};
+	}
+
+    template<Numeric T>
+	inline Vector3<T> operator+(const Vector3<T>& v0, const Vector3<T>& v1)
+	{
+		return {v0.x + v1.x, v0.y + v1.y, v0.z + v1.z};
+	}
+
+    template<Numeric T>
+	inline Vector3<T>& operator+=(Vector3<T>& v0, const Vector3<T>& v1)
+	{
+		v0.x += v1.x;
+		v0.y += v1.y;
+		v0.z += v1.z;
+		return v0;
+	}
 
     using Vector2f = Vector2<float>;
     using Vector2i = Vector2<int>;

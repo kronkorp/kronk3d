@@ -45,4 +45,24 @@ namespace k3::Math
 		return {v0.r + v1.r, v0.g + v1.g, v0.b + v1.b, v0.a + v1.a};
 	}
 
+    // Component-wise product (modulation), e.g. texture * vertex color.
+	inline Color operator*(const Color& v0, const Color& v1)
+	{
+		return {v0.r * v1.r, v0.g * v1.g, v0.b * v1.b, v0.a * v1.a};
+	}
+
+	inline Color operator*(const Color& v, float s)
+	{
+		return {v.r * s, v.g * s, v.b * s, v.a * s};
+	}
+
+	inline Color& operator+=(Color& v0, const Color& v1)
+	{
+		v0.r += v1.r;
+		v0.g += v1.g;
+		v0.b += v1.b;
+		v0.a += v1.a;
+		return v0;
+	}
+
 }
