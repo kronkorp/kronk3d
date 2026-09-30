@@ -1,7 +1,8 @@
 #include "CubeTextured.hpp"
 #include "Vector.hpp"
-#include "utils/texture/Texture.hpp"
-#include <cstddef>
+#include "scene/Texture.hpp"
+#include <cstdint>
+#include <memory>
 #include <iterator>
 #include <vector>
 
@@ -67,19 +68,7 @@ static k3::Math::Vector2f cube_uvs[] =
     {0.f, 0.f}, {1.f, 0.f}, {0.f, 1.f}, {1.f, 1.f},
 };
 
-// White so the (future) texture sample isn't tinted; kept only because the
-// rasterizer currently indexes mesh.colors unconditionally.
-static k3::Math::Color cube_colors[] =
-{
-    {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f},
-    {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f},
-    {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f},
-    {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f},
-    {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f},
-    {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f}, {1.f, 1.f, 1.f, 1.f},
-};
-
-static size_t cube_indices[] =
+static std::uint32_t cube_indices[] =
 {
     // -X face
     0,  2,  1,
@@ -106,12 +95,18 @@ static size_t cube_indices[] =
     21, 23, 22,
 };
 
-const k3::Mesh cubeTextured
+k3::Model makeTexturedCube(const std::filesystem::path& texturePath)
 {
-    std::vector<k3::Math::Vector3f>(std::begin(cube_positions), std::end(cube_positions)),
-    std::vector<k3::Math::Vector2f>(std::begin(cube_uvs), std::end(cube_uvs)),
-    std::vector<k3::Math::Color>(std::begin(cube_colors), std::end(cube_colors)),
-    std::vector<std::size_t>(std::begin(cube_indices), std::end(cube_indices)),
-    36,
-    k3::Texture::fromImage("example/assets/stone.png")
-};
+    auto mesh = std::make_shared<k3::Mesh>(k3::Mesh{
+        .positions = std::vector<k3::Math::Vector3f>(std::begin(cube_positions), std::end(cube_positions)),
+        .uvs       = std::vector<k3::Math::Vector2f>(std::begin(cube_uvs), std::end(cube_uvs)),
+        .indices   = std::vector<std::uint32_t>(std::begin(cube_indices), std::end(cube_indices)),
+    });
+    mesh->computeNormals();
+
+    auto material = std::make_shared<k3::Material>();
+    material->name = "stone";
+    material->diffuseMap = k3::Texture::load(texturePath);
+
+    return k3::Model{"cube", {{mesh, material}}};
+}

@@ -9,10 +9,11 @@
 
 #include "Color.hpp"
 #include "Matrix.hpp"
-#include "utils/Mesh.hpp"
+#include "scene/Material.hpp"
+#include "scene/Mesh.hpp"
+#include "scene/Model.hpp"
 #include "utils/Vertex.hpp"
 #include "utils/Viewport.hpp"
-#include "utils/texture/Texture.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -23,19 +24,23 @@ namespace k3
     class Rasterizer
     {
         using FrameBuffer = std::vector<Math::Color>;
-        using DepthBuffer = std::vector<std::uint32_t>;
+        using DepthBuffer = std::vector<float>;
 
         public:
             Rasterizer(std::size_t width, std::size_t height);
             ~Rasterizer() = default;
 
+            // Which winding gets discarded. Front faces are CCW, so Cull::CW is back-face culling.
             enum class Cull {
                 None,
                 CW,
                 CCW
             };
 
-            void draw(const Mesh& mesh, const Viewport& viewport, const Math::Matrix4& transform = Math::Matrix4::identity(), Cull culling = Cull::CW);
+            void draw(const Mesh& mesh, const Material& material, const Viewport& viewport, const Math::Matrix4& transform = Math::Matrix4::identity(), Cull culling = Cull::CW);
+
+            // Double-sided materials are never culled.
+            void draw(const Model& model, const Viewport& viewport, const Math::Matrix4& transform = Math::Matrix4::identity(), Cull culling = Cull::CW);
 
             void clear(const Math::Color& color) noexcept;
 
@@ -48,7 +53,7 @@ namespace k3
             // Perspective divide, viewport transform, backface culling, then hands off to setup + rasterization.
             void drawSingleTriangle(
                 Vertex v0, Vertex v1, Vertex v2,
-                const Texture& texture,
+                const Material& material,
                 const Viewport& viewport, Cull culling
             );
 
@@ -59,10 +64,10 @@ namespace k3
                 std::int32_t& xmin, std::int32_t& xmax, std::int32_t& ymin, std::int32_t& ymax
             ) const noexcept;
 
-            // Edge-function scan of the bounding box: barycentric test + color interpolation + pixel write.
+            // Edge-function scan of the bounding box: barycentric test + attribute interpolation + pixel write.
             void rasterizeTriangle(
                 const Vertex& v0, const Vertex& v1, const Vertex& v2,
-                const Texture& texture,
+                const Material& material,
                 float det012,
                 std::int32_t xmin, std::int32_t xmax, std::int32_t ymin, std::int32_t ymax
             );
