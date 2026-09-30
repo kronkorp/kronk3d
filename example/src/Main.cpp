@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdint>
 #include <format>
+#include <numbers>
 #include "cube/Cube.hpp"
 #include "cube/CubeTextured.hpp"
 
@@ -117,7 +118,7 @@ int main(void)
         engine.draw(
             cubeTextured,
             viewport,
-            k3::Math::Matrix4::perspective(0.01f, 10.f, M_PI / 3.f, WIDTH * 1.f / WIDTH) * view * model,
+            k3::Math::Matrix4::perspective(0.01f, 10.f, std::numbers::pi_v<float> / 3.f, WIDTH * 1.f / WIDTH) * view * model,
             k3::Rasterizer::Cull::None
         );
 
