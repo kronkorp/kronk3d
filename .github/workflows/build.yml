@@ -49,6 +49,9 @@ jobs:
   windows-msvc:
     name: Windows MSVC (${{ matrix.build_type }})
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
