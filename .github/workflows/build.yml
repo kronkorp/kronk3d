@@ -1,0 +1,97 @@
+name: Build
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.compiler }} (${{ matrix.build_type }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [gcc, clang]
+        build_type: [Debug, Release]
+        include:
+          - compiler: gcc
+            cc: gcc
+            cxx: g++
+          - compiler: clang
+            cc: clang
+            cxx: clang++
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libsfml-dev libgl-dev
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=${{ matrix.build_type }}
+          -DCMAKE_C_COMPILER=${{ matrix.cc }}
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+
+      - name: Build
+        run: cmake --build build --parallel
+
+  windows-msvc:
+    name: Windows MSVC (${{ matrix.build_type }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        build_type: [Debug, Release]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: cmake -S . -B build -A x64 -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+
+      - name: Build
+        run: cmake --build build --config ${{ matrix.build_type }} --parallel
+
+  windows-mingw:
+    name: Windows MinGW (Release)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            git
+            mingw-w64-ucrt-x86_64-gcc
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-freetype
+
+      - uses: actions/checkout@v4
+
+      # MSYS2 ships SFML 3, so the example falls back to building SFML 2.6 from
+      # source, against MSYS2's own freetype instead of SFML's prebuilt extlibs.
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+          -DSFML_USE_SYSTEM_DEPS=ON
+
+      - name: Build
+        run: cmake --build build --parallel
