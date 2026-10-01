@@ -74,7 +74,21 @@ namespace
         k3::Backend backend = k3::Backend::Software;
         std::size_t scene = 2;
         std::string screenshot{};   // Render a few frames, save the last one there and quit
+        k3::AntiAliasing antiAliasing = k3::AntiAliasing::FXAA;
     };
+
+    const char* toString(k3::AntiAliasing mode)
+    {
+        switch (mode) {
+            case k3::AntiAliasing::FXAA:
+                return "FXAA";
+            case k3::AntiAliasing::SSAA:
+                return "SSAA";
+            case k3::AntiAliasing::None:
+                break;
+        }
+        return "no AA";
+    }
 
     std::optional<Options> parseOptions(int argc, char** argv)
     {
@@ -93,6 +107,16 @@ namespace
                 options.scene = static_cast<std::size_t>(std::clamp(std::atoi(argv[++i]), 1, 4) - 1);
             } else if (arg == "--screenshot" && hasValue) {
                 options.screenshot = argv[++i];
+            } else if (arg == "--aa" && hasValue) {
+                const std::string_view value = argv[++i];
+                if (value == "none")
+                    options.antiAliasing = k3::AntiAliasing::None;
+                else if (value == "fxaa")
+                    options.antiAliasing = k3::AntiAliasing::FXAA;
+                else if (value == "ssaa")
+                    options.antiAliasing = k3::AntiAliasing::SSAA;
+                else
+                    return std::nullopt;
             } else {
                 return std::nullopt;
             }
@@ -109,7 +133,7 @@ int main(int argc, char** argv)
 
     const auto options = parseOptions(argc, argv);
     if (!options) {
-        std::cerr << "usage: " << argv[0] << " [--backend software|opengl] [--scene 1-4] [--screenshot file.png]" << std::endl;
+        std::cerr << "usage: " << argv[0] << " [--backend software|opengl] [--scene 1-4] [--aa none|fxaa|ssaa] [--screenshot file.png]" << std::endl;
         return 2;
     }
 
@@ -147,10 +171,11 @@ int main(int argc, char** argv)
 
     // Tab switches between the software and the OpenGL backend.
     k3::Backend backend = options->backend;
+    k3::AntiAliasing antiAliasing = options->antiAliasing;
     std::unique_ptr<k3::IRasterizer> rasterizer;
     auto switchTo = [&](k3::Backend wanted) {
         const sf::Vector2u size = window.getSize();
-        auto created = k3::createRasterizer(wanted, {.width = size.x, .height = size.y, .glLoader = loader});
+        auto created = k3::createRasterizer(wanted, {.width = size.x, .height = size.y, .glLoader = loader, .antiAliasing = antiAliasing});
 
         if (!created) {
             std::cerr << "Cannot create the rasterizer: " << created.error() << std::endl;
@@ -197,6 +222,10 @@ int main(int argc, char** argv)
                 currentScene = static_cast<std::size_t>(event.key.code - sf::Keyboard::Num1);
             if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::Tab)
                 switchTo(backend == k3::Backend::Software ? k3::Backend::OpenGL : k3::Backend::Software);
+            if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::F) {
+                antiAliasing = static_cast<k3::AntiAliasing>((static_cast<int>(antiAliasing) + 1) % 3);
+                rasterizer->setAntiAliasing(antiAliasing);
+            }
         }
 
         const auto frameNow = Clock::now();
@@ -246,8 +275,8 @@ int main(int argc, char** argv)
             const double avgFrameMs = frameTimeAccumulatedMs / frameCount;
 
             window.setTitle(std::format(
-                "kronk3d [{}] — {} — FPS: {:.1f} | render: {:.2f} ms | {} triangles [1-4: scene, Tab: backend]",
-                rasterizer->name(), model.name, fps, avgFrameMs, rasterizer->stats().triangles
+                "kronk3d [{}, {}] — {} — FPS: {:.1f} | render: {:.2f} ms | {} triangles [1-4: scene, Tab: backend, F: anti-aliasing]",
+                rasterizer->name(), toString(antiAliasing), model.name, fps, avgFrameMs, rasterizer->stats().triangles
             ));
 
             frameCount = 0;

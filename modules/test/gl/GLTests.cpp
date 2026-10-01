@@ -158,31 +158,36 @@ K3_TEST(gl_matches_the_software_backend)
     K3_REQUIRE(gpu);
     k3::SoftwareRasterizer cpu(W, H);
 
-    drawScene(*gpu);
-    drawScene(cpu);
+    for (auto mode : {k3::AntiAliasing::None, k3::AntiAliasing::FXAA, k3::AntiAliasing::SSAA}) {
+        gpu->setAntiAliasing(mode);
+        cpu.setAntiAliasing(mode);
+        drawScene(*gpu);
+        drawScene(cpu);
 
-    const auto a = gpu->readPixels().pixels;
-    const auto b = cpu.readPixels().pixels;
-    K3_REQUIRE(a.size() == b.size());
+        const auto a = gpu->readPixels().pixels;
+        const auto b = cpu.readPixels().pixels;
+        K3_REQUIRE(a.size() == b.size());
 
-    // Rasterization rules and texture LOD differ slightly between implementations: compare
-    // statistically, tight enough to catch any real shading divergence.
-    double sum = 0.0;
-    std::size_t over8 = 0, over32 = 0;
-    for (std::size_t i = 0; i < a.size(); i += 4) {
-        int worst = 0;
-        for (int c = 0; c < 3; ++c)
-            worst = std::max(worst, std::abs(int(a[i + c]) - int(b[i + c])));
-        sum += worst;
-        over8 += worst > 8;
-        over32 += worst > 32;
+        // Rasterization rules and texture LOD differ slightly between implementations: compare
+        // statistically, tight enough to catch any real shading divergence.
+        double sum = 0.0;
+        std::size_t over8 = 0, over32 = 0;
+        for (std::size_t i = 0; i < a.size(); i += 4) {
+            int worst = 0;
+            for (int c = 0; c < 3; ++c)
+                worst = std::max(worst, std::abs(int(a[i + c]) - int(b[i + c])));
+            sum += worst;
+            over8 += worst > 8;
+            over32 += worst > 32;
+        }
+        const double pixels = W * H;
+        std::cout << "    anti-aliasing " << static_cast<int>(mode) << ": mean difference " << sum / pixels
+                  << ", > 8: " << 100.0 * over8 / pixels << "%, > 32: " << 100.0 * over32 / pixels << "%" << std::endl;
+
+        K3_CHECK(sum / pixels < 1.0);
+        K3_CHECK(over8 / pixels < 0.01);
+        K3_CHECK(over32 / pixels < 0.002);
     }
-    const double pixels = W * H;
-    std::cout << "    mean difference " << sum / pixels << ", > 8: " << 100.0 * over8 / pixels << "%, > 32: " << 100.0 * over32 / pixels << "%" << std::endl;
-
-    K3_CHECK(sum / pixels < 1.0);
-    K3_CHECK(over8 / pixels < 0.01);
-    K3_CHECK(over32 / pixels < 0.002);
 }
 
 K3_TEST(gl_read_pixels_returns_the_top_row_first)

@@ -24,6 +24,7 @@ Both backends produce the same image: the shading code is mirrored, and tests co
 - **Textures**
   - Mipmaps built in linear space for sRGB textures.
   - Nearest / bilinear / trilinear filtering; repeat, mirrored and clamp wrap modes, with OpenGL sampler semantics.
+- **Anti-aliasing**: FXAA (post-process) or SSAA (2x2 supersampling), the same algorithm on both backends.
 - **Transparency**
   - Alpha test (`AlphaMode::Mask`).
   - Alpha blending (`AlphaMode::Blend`), sorted back to front. Double-sided blended meshes draw their back faces first.
@@ -125,18 +126,19 @@ bumps its version); to change a mesh, replace it with a new one.
 
 ## Example
 
-`kronk3d_example [--backend software|opengl] [--scene 1-4] [--screenshot file.png]`
+`kronk3d_example [--backend software|opengl] [--scene 1-4] [--aa none|fxaa|ssaa] [--screenshot file.png]`
 
 | Key | Action |
 |---|---|
 | `1`-`4` | Textured cube, vertex-colored cube, Spot (OBJ), transparency |
 | `Tab` | Switch between the software and OpenGL backends |
+| `F` | Cycle anti-aliasing: none, FXAA, SSAA |
 | `ZQSD` / `WASD`, `Space`, `Shift` | Move |
 | Arrow keys, right mouse drag | Look around |
 
 ## Benchmark
 
-`kronk3d_bench <scene.obj> [--size WxH] [--frames N] [--threads N] [--no-shadows] [--screenshot prefix]`
+`kronk3d_bench <scene.obj> [--size WxH] [--frames N] [--threads N] [--no-shadows] [--aa none|fxaa|ssaa] [--screenshot prefix]`
 renders an OBJ scene with each backend (OpenGL when a context can be created) and reports load and
 frame times. `tools/bench/download_sponza.sh` fetches Crytek Sponza (262k triangles, 54 textures):
 

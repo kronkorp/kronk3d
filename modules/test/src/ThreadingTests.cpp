@@ -33,7 +33,7 @@ namespace
         return mesh;
     }
 
-    std::vector<std::uint8_t> render(unsigned threads)
+    std::vector<std::uint8_t> render(unsigned threads, k3::AntiAliasing antiAliasing = k3::AntiAliasing::None)
     {
         k3::Image checker(8, 8);
         for (std::uint32_t y = 0; y < 8; ++y)
@@ -57,6 +57,7 @@ namespace
         environment.shadows.resolution = 512;
 
         k3::SoftwareRasterizer rasterizer(320, 240, threads);
+        rasterizer.setAntiAliasing(antiAliasing);
         rasterizer.beginFrame(camera, environment);
         rasterizer.draw(sphere(48, 96), opaque, k3::Math::Matrix4::scale(0.6f));
         rasterizer.draw(sphere(24, 48), glass, k3::Math::Matrix4::translate({0.4f, 0.f, 0.6f}) * k3::Math::Matrix4::scale(0.5f));
@@ -83,8 +84,10 @@ K3_TEST(thread_pool_runs_every_index_once)
 
 K3_TEST(software_output_does_not_depend_on_thread_count)
 {
-    const auto reference = render(1);
+    for (auto mode : {k3::AntiAliasing::None, k3::AntiAliasing::FXAA, k3::AntiAliasing::SSAA}) {
+        const auto reference = render(1, mode);
 
-    K3_CHECK(render(2) == reference);
-    K3_CHECK(render(7) == reference);
+        K3_CHECK(render(2, mode) == reference);
+        K3_CHECK(render(7, mode) == reference);
+    }
 }
