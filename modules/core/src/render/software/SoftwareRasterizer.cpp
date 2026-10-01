@@ -1,6 +1,7 @@
 #include "SoftwareRasterizer.hpp"
 #include "Clipper.hpp"
 #include "Pipeline.hpp"
+#include "PostProcess.hpp"
 #include "Shading.hpp"
 #include "ThreadPool.hpp"
 #include "render/ShadowFit.hpp"
@@ -212,7 +213,10 @@ struct k3::SoftwareRasterizer::Impl
 
     sw::ThreadPool pool;
 
-    std::vector<Math::Color>          color;
+    AntiAliasing                      antiAliasing = AntiAliasing::None;
+    std::uint32_t                     outputWidth = 0, outputHeight = 0;
+    std::vector<Math::Color>          output;           // Anti-aliased frame (color is the frame itself without AA)
+    std::vector<Math::Color>          color;            // Render resolution (twice the output's with SSAA)
     std::vector<float>                depth;
     std::vector<const sw::Triangle*>  visibility;       // Nearest opaque triangle of each pixel
     std::vector<float>                shadowDepth;
@@ -246,10 +250,29 @@ struct k3::SoftwareRasterizer::Impl
 
     void resize(std::uint32_t w, std::uint32_t h)
     {
-        mainPass.setSize(w, h);
-        color.assign(static_cast<std::size_t>(w) * h, Math::Color::Black);
-        depth.assign(static_cast<std::size_t>(w) * h, 1.f);
-        visibility.assign(static_cast<std::size_t>(w) * h, nullptr);
+        const std::uint32_t scale = antiAliasing == AntiAliasing::SSAA ? 2 : 1;
+        const std::size_t renderPixels = static_cast<std::size_t>(w) * scale * h * scale;
+
+        outputWidth = w;
+        outputHeight = h;
+        mainPass.setSize(w * scale, h * scale);
+        color.assign(renderPixels, Math::Color::Black);
+        depth.assign(renderPixels, 1.f);
+        visibility.assign(renderPixels, nullptr);
+        output.assign(antiAliasing == AntiAliasing::None ? 0 : static_cast<std::size_t>(w) * h, Math::Color::Black);
+    }
+
+    [[nodiscard]] const std::vector<Math::Color>& finalColor() const noexcept
+    {
+        return antiAliasing == AntiAliasing::None ? color : output;
+    }
+
+    void antiAlias()
+    {
+        if (antiAliasing == AntiAliasing::SSAA)
+            sw::downsample2x2(color, outputWidth, outputHeight, output, pool);
+        else if (antiAliasing == AntiAliasing::FXAA)
+            sw::fxaa(color, outputWidth, outputHeight, output, pool);
     }
 
     /* Frame planning (sequential) */
@@ -791,12 +814,25 @@ void k3::SoftwareRasterizer::resize(std::uint32_t width, std::uint32_t height)
 
 std::uint32_t k3::SoftwareRasterizer::width() const noexcept
 {
-    return m_impl->mainPass.width;
+    return m_impl->outputWidth;
 }
 
 std::uint32_t k3::SoftwareRasterizer::height() const noexcept
 {
-    return m_impl->mainPass.height;
+    return m_impl->outputHeight;
+}
+
+void k3::SoftwareRasterizer::setAntiAliasing(AntiAliasing mode)
+{
+    if (mode == m_impl->antiAliasing)
+        return;
+    m_impl->antiAliasing = mode;
+    m_impl->resize(m_impl->outputWidth, m_impl->outputHeight);
+}
+
+k3::AntiAliasing k3::SoftwareRasterizer::antiAliasing() const noexcept
+{
+    return m_impl->antiAliasing;
 }
 
 unsigned k3::SoftwareRasterizer::threadCount() const noexcept
@@ -807,7 +843,7 @@ unsigned k3::SoftwareRasterizer::threadCount() const noexcept
 void k3::SoftwareRasterizer::beginFrame(const Camera& camera, const Environment& environment)
 {
     auto& impl = *m_impl;
-    const float aspect = impl.mainPass.height ? static_cast<float>(impl.mainPass.width) / impl.mainPass.height : 1.f;
+    const float aspect = impl.outputHeight ? static_cast<float>(impl.outputWidth) / impl.outputHeight : 1.f;
 
     impl.camera = camera;
     impl.environment = environment;
@@ -847,6 +883,7 @@ void k3::SoftwareRasterizer::endFrame()
     impl.planMainPass(blendedStart);
     impl.runGeometry(impl.mainPass);
     impl.pool.parallelFor(impl.mainPass.tileCount(), [&](std::size_t tile) { impl.renderTile(tile); });
+    impl.antiAlias();
 
     // Draw states point into the recorded materials: drop both together.
     impl.drawStates.clear();
@@ -859,17 +896,18 @@ void k3::SoftwareRasterizer::endFrame()
 k3::Image k3::SoftwareRasterizer::readPixels()
 {
     auto& impl = *m_impl;
-    const std::uint32_t width = impl.mainPass.width;
+    const std::uint32_t width = impl.outputWidth;
+    const std::vector<Math::Color>& frame = impl.finalColor();
     Image image;
 
     image.width = width;
-    image.height = impl.mainPass.height;
-    image.pixels.resize(impl.color.size() * 4);
+    image.height = impl.outputHeight;
+    image.pixels.resize(frame.size() * 4);
 
     const std::uint8_t* encode = srgb::encodeTable();
     impl.pool.parallelFor(image.height, [&](std::size_t y) {
         for (std::size_t i = y * width; i < (y + 1) * width; ++i) {
-            const Math::Color& c = impl.color[i];
+            const Math::Color& c = frame[i];
 
             image.pixels[i * 4 + 0] = srgb::encode(c.r, encode);
             image.pixels[i * 4 + 1] = srgb::encode(c.g, encode);
@@ -887,5 +925,5 @@ const k3::FrameStats& k3::SoftwareRasterizer::stats() const noexcept
 
 const std::vector<k3::Math::Color>& k3::SoftwareRasterizer::colorBuffer() const noexcept
 {
-    return m_impl->color;
+    return m_impl->finalColor();
 }

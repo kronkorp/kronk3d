@@ -28,6 +28,13 @@ namespace k3
         OpenGL      // OpenGL 3.3 core, renders into the GL context current on the calling thread
     };
 
+    // Applied by every backend with the same algorithm, so they keep producing the same image.
+    enum class AntiAliasing {
+        None,
+        FXAA,       // Post-process edge smoothing on the final image: cheap, slightly blurry
+        SSAA        // 2x2 supersampling: renders 4x the pixels and averages them (in linear space): exact, costly
+    };
+
     struct FrameStats
     {
         std::size_t drawCalls = 0;
@@ -45,6 +52,7 @@ namespace k3
         std::uint32_t height  = 600;
         unsigned      threads = 0;          // Software: worker threads, 0 = one per hardware thread
         GLLoader      glLoader{};           // OpenGL: required, and the context must be current
+        AntiAliasing  antiAliasing = AntiAliasing::None;
     };
 
     // A frame is:
@@ -68,6 +76,9 @@ namespace k3
             virtual void resize(std::uint32_t width, std::uint32_t height) = 0;
             [[nodiscard]] virtual std::uint32_t width() const noexcept = 0;
             [[nodiscard]] virtual std::uint32_t height() const noexcept = 0;
+
+            virtual void setAntiAliasing(AntiAliasing mode) = 0;
+            [[nodiscard]] virtual AntiAliasing antiAliasing() const noexcept = 0;
 
             virtual void beginFrame(const Camera& camera, const Environment& environment) = 0;
 
