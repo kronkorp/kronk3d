@@ -2,6 +2,7 @@
 #include "Kronk3d.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <format>
 #include <iostream>
@@ -105,7 +106,9 @@ int main(void)
     k3::Environment environment;
     environment.clearColor = k3::Math::Color::fromSRGB(22, 22, 26);
     environment.ambient = {0.15f, 0.15f, 0.18f, 1.f};
-    environment.lights.push_back(k3::Light::directional({-0.5f, -1.f, -0.6f}, {1.f, 0.95f, 0.9f, 1.f}, 2.f));
+    environment.lights.push_back(k3::Light::directional({-0.5f, -1.f, -0.6f}, {1.f, 0.95f, 0.9f, 1.f}, 1.5f));
+    // Warm bulb orbiting the model (position updated every frame).
+    environment.lights.push_back(k3::Light::point({}, {1.f, 0.45f, 0.2f, 1.f}, 6.f, 6.f));
 
     using Clock = std::chrono::steady_clock;
 
@@ -145,6 +148,8 @@ int main(void)
         const auto bounds = model.bounds();
         const auto fit = k3::Math::Matrix4::scale(1.5f / bounds.radius()) * k3::Math::Matrix4::translate(-bounds.center());
         const auto transform = k3::Math::Matrix4::rotateZX(rotationAngle) * fit;
+
+        environment.lights[1].position = {2.f * std::cos(elapsedSinceStart), 1.f, 2.f * std::sin(elapsedSinceStart)};
 
         rasterizer->beginFrame(camera, environment);
         rasterizer->draw(model, transform);
