@@ -53,6 +53,8 @@ namespace
         camera.lookAt({0.f, 0.f, 0.f});
         k3::Environment environment;
         environment.lights = {k3::Light::directional({-1.f, -1.f, -1.f}), k3::Light::point({1.f, 1.f, 1.f}, k3::Math::Color::White, 3.f)};
+        environment.lights[0].castShadows = true;
+        environment.shadows.resolution = 512;
 
         k3::SoftwareRasterizer rasterizer(320, 240, threads);
         rasterizer.beginFrame(camera, environment);

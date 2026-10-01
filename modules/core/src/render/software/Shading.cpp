@@ -35,6 +35,8 @@ k3::sw::ShadingContext k3::sw::ShadingContext::prepare(const Camera& camera, con
     for (const Light& light : environment.lights) {
         if (context.lightCount == MAX_LIGHTS)
             break;
+        if (context.shadowLight < 0 && light.castShadows && light.type == LightType::Directional)
+            context.shadowLight = static_cast<int>(context.lightCount);
 
         const Vector3f direction = Vector3f::normalize(light.direction);
         context.lights[context.lightCount++] = {
@@ -49,6 +51,39 @@ k3::sw::ShadingContext k3::sw::ShadingContext::prepare(const Camera& camera, con
         };
     }
     return context;
+}
+
+float k3::sw::shadowVisibility(const ShadowMap& shadow, const Math::Vector3f& position, const Math::Vector3f& normal) noexcept
+{
+    if (!shadow.depth || shadow.size == 0)
+        return 1.f;
+
+    // The light's projection is orthographic: w = 1, no divide needed.
+    const Math::Vector4f clip = shadow.viewProjection * (position + normal * shadow.normalOffset).asPoint();
+    const float u = clip.x * 0.5f + 0.5f;
+    const float v = 0.5f - clip.y * 0.5f;
+    const float depth = clip.z * 0.5f + 0.5f - shadow.depthBias;
+
+    // Outside the shadow map: nothing was rendered there, so nothing occludes.
+    if (!(u >= 0.f && u < 1.f && v >= 0.f && v < 1.f) || depth > 1.f)
+        return 1.f;
+
+    const int size = static_cast<int>(shadow.size);
+    const int cx = static_cast<int>(u * size);
+    const int cy = static_cast<int>(v * size);
+    int lit = 0, taps = 0;
+
+    for (int dy = -shadow.pcfRadius; dy <= shadow.pcfRadius; ++dy) {
+        const int y = std::clamp(cy + dy, 0, size - 1);
+
+        for (int dx = -shadow.pcfRadius; dx <= shadow.pcfRadius; ++dx) {
+            const int x = std::clamp(cx + dx, 0, size - 1);
+
+            lit += depth <= shadow.depth[static_cast<std::size_t>(y) * shadow.size + x];
+            ++taps;
+        }
+    }
+    return static_cast<float>(lit) / static_cast<float>(taps);
 }
 
 float k3::sw::coverage(const Material& material, const Fragment& fragment) noexcept
@@ -105,6 +140,11 @@ k3::Math::Color k3::sw::shade(const ShadingContext& context, const Material& mat
         const float nDotL = Vector3f::dot(n, l);
         if (nDotL <= 0.f || attenuation <= 0.f)
             continue;
+        if (static_cast<int>(i) == context.shadowLight) {
+            attenuation *= shadowVisibility(context.shadow, fragment.position, n);
+            if (attenuation <= 0.f)
+                continue;
+        }
 
         const Math::Color radiance = light.radiance * attenuation;
         result += radiance * albedo * nDotL;
