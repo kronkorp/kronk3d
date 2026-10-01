@@ -10,6 +10,7 @@
 #include "Matrix.hpp"
 #include "Vector.hpp"
 #include "render/Environment.hpp"
+#include "render/ShadowFit.hpp"
 #include "scene/Camera.hpp"
 #include "scene/Material.hpp"
 #include <cstddef>
@@ -42,15 +43,23 @@ namespace k3::sw
         float          cosInner, cosOuter;
     };
 
-    // Depth seen from the shadow-casting light, rendered before the frame is shaded.
+    // Depth seen from the shadow-casting light, one map per cascade, rendered before the frame is shaded.
     struct ShadowMap
     {
-        const float*  depth = nullptr;              // size x size, in [0, 1], row 0 on the light's +y side
-        std::uint32_t size  = 0;
-        Math::Matrix4 viewProjection = Math::Matrix4::identity();   // World -> light clip space (orthographic)
-        float         depthBias    = 0.f;           // In depth units
-        float         normalOffset = 0.f;           // In world units
-        int           pcfRadius    = 0;
+        struct Cascade
+        {
+            const float*  depth = nullptr;          // size x size, in [0, 1], row 0 on the light's +y side
+            Math::Matrix4 viewProjection = Math::Matrix4::identity();   // World -> light clip space (orthographic)
+            float         normalOffset = 0.f;       // In world units
+            float         splitDistance = 0.f;      // Used up to this view distance
+        };
+
+        Cascade        cascades[MAX_SHADOW_CASCADES]{};
+        std::size_t    count = 0;
+        std::uint32_t  size = 0;
+        float          depthBias = 0.f;             // In depth units
+        int            pcfRadius = 0;
+        Math::Vector3f cameraPosition{}, cameraForward{};   // To measure view distances
     };
 
     // Per-frame data every fragment needs, prepared once in beginFrame().
@@ -68,8 +77,9 @@ namespace k3::sw
         static ShadingContext prepare(const Camera& camera, const Environment& environment);
     };
 
-    // Fraction of the (2r + 1)^2 shadow-map texels around `position` that see the light, in [0, 1].
-    // `normal` (normalized, facing the viewer) pushes the lookup off the surface against shadow acne.
+    // Fraction of the (2r + 1)^2 shadow-map texels around `position` that see the light, in [0, 1], in
+    // the first cascade reaching its view distance. `normal` (normalized, facing the viewer) pushes the
+    // lookup off the surface against shadow acne.
     float shadowVisibility(const ShadowMap& shadow, const Math::Vector3f& position, const Math::Vector3f& normal) noexcept;
 
     // Opacity of the fragment (diffuse alpha * vertex alpha * textures), used by the alpha test.

@@ -55,11 +55,17 @@ k3::sw::ShadingContext k3::sw::ShadingContext::prepare(const Camera& camera, con
 
 float k3::sw::shadowVisibility(const ShadowMap& shadow, const Math::Vector3f& position, const Math::Vector3f& normal) noexcept
 {
-    if (!shadow.depth || shadow.size == 0)
+    if (shadow.count == 0 || shadow.size == 0)
         return 1.f;
 
+    const float distance = Vector3f::dot(position - shadow.cameraPosition, shadow.cameraForward);
+    std::size_t index = 0;
+    while (index + 1 < shadow.count && distance > shadow.cascades[index].splitDistance)
+        ++index;
+    const ShadowMap::Cascade& cascade = shadow.cascades[index];
+
     // The light's projection is orthographic: w = 1, no divide needed.
-    const Math::Vector4f clip = shadow.viewProjection * (position + normal * shadow.normalOffset).asPoint();
+    const Math::Vector4f clip = cascade.viewProjection * (position + normal * cascade.normalOffset).asPoint();
     const float u = clip.x * 0.5f + 0.5f;
     const float v = 0.5f - clip.y * 0.5f;
     const float depth = clip.z * 0.5f + 0.5f - shadow.depthBias;
@@ -79,7 +85,7 @@ float k3::sw::shadowVisibility(const ShadowMap& shadow, const Math::Vector3f& po
         for (int dx = -shadow.pcfRadius; dx <= shadow.pcfRadius; ++dx) {
             const int x = std::clamp(cx + dx, 0, size - 1);
 
-            lit += depth <= shadow.depth[static_cast<std::size_t>(y) * shadow.size + x];
+            lit += depth <= cascade.depth[static_cast<std::size_t>(y) * shadow.size + x];
             ++taps;
         }
     }
