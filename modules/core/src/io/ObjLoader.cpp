@@ -1,4 +1,5 @@
 #include "ObjLoader.hpp"
+#include "render/software/ThreadPool.hpp"
 #include "utils/Log.hpp"
 #include <algorithm>
 #include <cctype>
@@ -180,26 +181,89 @@ namespace
         return statement;
     }
 
+    using TextureSlot = std::shared_ptr<k3::Texture> k3::Material::*;
+
+    // Textures are requested while MTL files are read, then decoded all at once, in parallel (decoding
+    // PNG/JPEG is most of the loading time of a textured scene). Each file is loaded once per usage.
     class TextureCache
     {
         public:
             TextureCache(const k3::ObjLoadOptions& options) : m_options(options) {}
 
-            std::shared_ptr<k3::Texture> get(const std::filesystem::path& path, k3::ColorSpace colorSpace, bool opacity)
+            void request(const std::shared_ptr<k3::Material>& material, TextureSlot slot, const std::filesystem::path& path, k3::ColorSpace colorSpace, bool opacity, bool clamp)
             {
-                const std::string key = std::format("{}|{}|{}", path.string(), static_cast<int>(colorSpace), opacity);
+                const std::string key = std::format("{}|{}|{}|{}", path.string(), static_cast<int>(colorSpace), opacity, clamp);
+                auto [it, inserted] = m_indices.try_emplace(key, m_entries.size());
 
-                if (auto it = m_textures.find(key); it != m_textures.end())
-                    return it->second;
+                if (inserted)
+                    m_entries.push_back({path, colorSpace, opacity, clamp});
 
-                auto texture = m_options.loadTexture ? m_options.loadTexture(path, colorSpace) : k3::Texture::load(path, colorSpace);
-                if (texture && opacity)
-                    texture = toOpacityMask(*texture);
-                m_textures.emplace(key, texture);
-                return texture;
+                Entry& entry = m_entries[it->second];
+                if (entry.loaded)
+                    (*material).*slot = entry.texture;
+                else
+                    entry.users.emplace_back(material, slot);
+            }
+
+            // Loads every texture requested since the last call and hands them to their materials.
+            void resolve()
+            {
+                std::vector<Entry*> pending;
+                for (auto& entry : m_entries)
+                    if (!entry.loaded)
+                        pending.push_back(&entry);
+
+                auto load = [&](std::size_t i) { pending[i]->texture = loadOne(*pending[i]); };
+                if (m_options.loadTexture) {
+                    // A user hook may not be thread-safe.
+                    for (std::size_t i = 0; i < pending.size(); ++i)
+                        load(i);
+                } else {
+                    k3::sw::ThreadPool(0).parallelFor(pending.size(), load);
+                }
+
+                for (Entry* entry : pending) {
+                    for (auto& [material, slot] : entry->users)
+                        (*material).*slot = entry->texture;
+                    entry->users.clear();
+                    entry->loaded = true;
+                }
             }
 
         private:
+            struct Entry
+            {
+                std::filesystem::path        path;
+                k3::ColorSpace               colorSpace;
+                bool                         opacity;
+                bool                         clamp;
+                std::shared_ptr<k3::Texture> texture{};
+                bool                         loaded = false;
+                std::vector<std::pair<std::shared_ptr<k3::Material>, TextureSlot>> users{};
+            };
+
+            std::shared_ptr<k3::Texture> loadOne(const Entry& entry) const
+            {
+                std::shared_ptr<k3::Texture> texture;
+
+                if (m_options.loadTexture) {
+                    texture = m_options.loadTexture(entry.path, entry.colorSpace);
+                } else if (auto image = k3::Image::load(entry.path)) {
+                    texture = std::make_shared<k3::Texture>(std::move(*image), entry.colorSpace);
+                } else {
+                    k3::log(k3::LogLevel::Error, "Failed to load texture {}", image.error());
+                }
+
+                if (texture && entry.opacity)
+                    texture = toOpacityMask(*texture);
+                if (texture && entry.clamp) {
+                    // Copy first: a loader hook may share its textures between requests.
+                    texture = std::make_shared<k3::Texture>(*texture);
+                    texture->sampler.wrapU = texture->sampler.wrapV = k3::TextureWrap::ClampToEdge;
+                }
+                return texture;
+            }
+
             // map_d is usually a grey-scale image, but some exporters store the mask in the alpha
             // channel instead: normalize to "red channel = opacity".
             static std::shared_ptr<k3::Texture> toOpacityMask(const k3::Texture& texture)
@@ -218,8 +282,9 @@ namespace
                 return result;
             }
 
-            const k3::ObjLoadOptions& m_options;
-            std::unordered_map<std::string, std::shared_ptr<k3::Texture>> m_textures;
+            const k3::ObjLoadOptions&                    m_options;
+            std::vector<Entry>                           m_entries;     // In request order
+            std::unordered_map<std::string, std::size_t> m_indices;
     };
 
     void parseMtl(
@@ -234,18 +299,12 @@ namespace
         std::istringstream lines(source);
         std::string line;
 
-        auto loadMap = [&](std::string_view rest, k3::ColorSpace colorSpace, bool opacity) -> std::shared_ptr<k3::Texture> {
+        auto requestMap = [&](std::string_view rest, TextureSlot slot, k3::ColorSpace colorSpace, bool opacity) {
             auto statement = parseTextureStatement(rest);
 
-            if (!options.loadTextures || statement.path.empty())
-                return nullptr;
-
-            auto texture = textures.get(resolvePath(baseDir, statement.path), colorSpace, opacity);
-            if (texture && statement.clamp) {
-                texture = std::make_shared<k3::Texture>(*texture);
-                texture->sampler.wrapU = texture->sampler.wrapV = k3::TextureWrap::ClampToEdge;
-            }
-            return texture;
+            (*current).*slot = nullptr;
+            if (options.loadTextures && !statement.path.empty())
+                textures.request(current, slot, resolvePath(baseDir, statement.path), colorSpace, opacity, statement.clamp);
         };
 
         while (std::getline(lines, line)) {
@@ -287,11 +346,11 @@ namespace
                 else if (illum == 1)
                     current->specular = {0.f, 0.f, 0.f, 1.f};
             } else if (keyword == "map_Kd") {
-                current->diffuseMap = loadMap(rest, k3::ColorSpace::Srgb, false);
+                requestMap(rest, &k3::Material::diffuseMap, k3::ColorSpace::Srgb, false);
             } else if (keyword == "map_Ks") {
-                current->specularMap = loadMap(rest, k3::ColorSpace::Srgb, false);
+                requestMap(rest, &k3::Material::specularMap, k3::ColorSpace::Srgb, false);
             } else if (keyword == "map_d") {
-                current->opacityMap = loadMap(rest, k3::ColorSpace::Linear, true);
+                requestMap(rest, &k3::Material::opacityMap, k3::ColorSpace::Linear, true);
             }
         }
     }
@@ -316,13 +375,14 @@ namespace
         };
 
         rest = trim(rest);
-        if (tryLoad(rest))
-            return;
-        while (!rest.empty()) {
-            std::string_view name = nextToken(rest);
-            if (!name.empty() && !tryLoad(name))
-                k3::log(k3::LogLevel::Warning, "OBJ: cannot open material library {}", name);
+        if (!tryLoad(rest)) {
+            while (!rest.empty()) {
+                std::string_view name = nextToken(rest);
+                if (!name.empty() && !tryLoad(name))
+                    k3::log(k3::LogLevel::Warning, "OBJ: cannot open material library {}", name);
+            }
         }
+        textures.resolve();
     }
 
     /* OBJ */
