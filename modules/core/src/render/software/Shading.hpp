@@ -7,11 +7,13 @@
 #pragma once
 
 #include "Color.hpp"
+#include "Matrix.hpp"
 #include "Vector.hpp"
 #include "render/Environment.hpp"
 #include "scene/Camera.hpp"
 #include "scene/Material.hpp"
 #include <cstddef>
+#include <cstdint>
 
 namespace k3::sw
 {
@@ -39,6 +41,17 @@ namespace k3::sw
         float          cosInner, cosOuter;
     };
 
+    // Depth seen from the shadow-casting light, rendered before the frame is shaded.
+    struct ShadowMap
+    {
+        const float*  depth = nullptr;              // size x size, in [0, 1], row 0 on the light's +y side
+        std::uint32_t size  = 0;
+        Math::Matrix4 viewProjection = Math::Matrix4::identity();   // World -> light clip space (orthographic)
+        float         depthBias    = 0.f;           // In depth units
+        float         normalOffset = 0.f;           // In world units
+        int           pcfRadius    = 0;
+    };
+
     // Per-frame data every fragment needs, prepared once in beginFrame().
     struct ShadingContext
     {
@@ -48,9 +61,15 @@ namespace k3::sw
         Math::Color    ambient{};
         PreparedLight  lights[MAX_LIGHTS]{};
         std::size_t    lightCount = 0;
+        int            shadowLight = -1;    // Index in `lights` of the light the shadow map belongs to
+        ShadowMap      shadow{};            // Filled in endFrame(), once the shadow pass is done
 
         static ShadingContext prepare(const Camera& camera, const Environment& environment);
     };
+
+    // Fraction of the (2r + 1)^2 shadow-map texels around `position` that see the light, in [0, 1].
+    // `normal` (normalized, facing the viewer) pushes the lookup off the surface against shadow acne.
+    float shadowVisibility(const ShadowMap& shadow, const Math::Vector3f& position, const Math::Vector3f& normal) noexcept;
 
     // Opacity of the fragment (diffuse alpha * vertex alpha * textures), used by the alpha test.
     float coverage(const Material& material, const Fragment& fragment) noexcept;

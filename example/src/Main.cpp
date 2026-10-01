@@ -9,6 +9,7 @@
 #include <memory>
 #include "cube/Cube.hpp"
 #include "cube/CubeTextured.hpp"
+#include "scenes/Floor.hpp"
 #include "scenes/Transparency.hpp"
 
 #ifndef K3_EXAMPLE_ASSETS_DIR
@@ -85,6 +86,8 @@ int main(void)
 
     const k3::Model transparency = makeTransparencyScene();
     const k3::Model* scenes[] = {&texturedCube, &coloredCube, &*spot, &transparency};
+    // Models are scaled to a 1.5 radius around the origin: the floor sits right under them.
+    const k3::Model floor = makeFloor(8.f, -1.55f);
     std::size_t currentScene = 2;
 
     auto created = k3::createRasterizer(k3::Backend::Software, {.width = WIDTH, .height = HEIGHT});
@@ -109,6 +112,7 @@ int main(void)
     environment.clearColor = k3::Math::Color::fromSRGB(22, 22, 26);
     environment.ambient = {0.15f, 0.15f, 0.18f, 1.f};
     environment.lights.push_back(k3::Light::directional({-0.5f, -1.f, -0.6f}, {1.f, 0.95f, 0.9f, 1.f}, 1.5f));
+    environment.lights.back().castShadows = true;
     // Warm bulb orbiting the model (position updated every frame).
     environment.lights.push_back(k3::Light::point({}, {1.f, 0.45f, 0.2f, 1.f}, 6.f, 6.f));
 
@@ -155,6 +159,7 @@ int main(void)
 
         rasterizer->beginFrame(camera, environment);
         rasterizer->draw(model, transform);
+        rasterizer->draw(floor);
         rasterizer->endFrame();
         frameTimeAccumulatedMs += rasterizer->stats().frameMs;
 
