@@ -112,14 +112,14 @@ struct k3::SoftwareRasterizer::Impl
         const Mesh& mesh = *command.mesh;
         const Material& material = command.material ? *command.material : defaultMaterial();
         const auto drawIndex = static_cast<std::uint32_t>(drawStates.size());
-        const sw::DrawState state{&material, material.alphaMode == AlphaMode::Mask, mesh.hasNormals()};
+        const sw::DrawState state{&material, material.alphaMode == AlphaMode::Mask, mesh.hasNormals(), mesh.hasColors()};
 
         drawStates.push_back(state);
 
         const Math::Matrix4 mvp = viewProjection * command.transform;
         const Math::Matrix4 normalMatrix = command.transform.normalMatrix();
         const bool hasUVs = mesh.hasUVs();
-        const bool hasColors = mesh.hasColors();
+        const bool hasColors = state.hasColors;
 
         transformed.resize(mesh.vertexCount());
         for (std::size_t i = 0; i < mesh.vertexCount(); ++i) {
@@ -275,15 +275,18 @@ struct k3::SoftwareRasterizer::Impl
         l1 *= inv;
         l2 *= inv;
 
+        const bool hasColors = drawStates[t.draw].hasColors;
+        const int count = hasColors ? sw::VARYING_COUNT : sw::ColorR;
         float v[sw::VARYING_COUNT];
-        for (int k = 0; k < sw::VARYING_COUNT; ++k)
+
+        for (int k = 0; k < count; ++k)
             v[k] = l0 * t.varyings[0][k] + l1 * t.varyings[1][k] + l2 * t.varyings[2][k];
 
         return {
             {v[sw::WorldX], v[sw::WorldY], v[sw::WorldZ]},
             {v[sw::NormalX], v[sw::NormalY], v[sw::NormalZ]},
             {v[sw::TexU], v[sw::TexV]},
-            {v[sw::ColorR], v[sw::ColorG], v[sw::ColorB], v[sw::ColorA]},
+            hasColors ? Math::Color{v[sw::ColorR], v[sw::ColorG], v[sw::ColorB], v[sw::ColorA]} : Math::Color::White,
             0.f,
             t.frontFacing,
         };

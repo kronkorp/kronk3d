@@ -43,6 +43,7 @@ namespace k3::sw
         const Material* material;   // Kept alive by the recorded draw command
         bool            alphaTest;
         bool            hasNormals; // Without normals, triangles are flat-shaded with their face normal
+        bool            hasColors;  // Without vertex colors, fragments get exactly white (no interpolation rounding)
     };
 
     // A triangle after clipping, projection and setup, ready to be rasterized.
