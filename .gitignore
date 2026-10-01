@@ -11,3 +11,6 @@ compile_commands.json
 
 # Images
 *.bmp
+
+# Logs
+*.log
