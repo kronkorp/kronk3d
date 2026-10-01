@@ -32,6 +32,10 @@ namespace k3
         std::shared_ptr<Texture> diffuseMap{};              // map_Kd, multiplies diffuse
         std::shared_ptr<Texture> specularMap{};             // map_Ks, multiplies specular
         std::shared_ptr<Texture> opacityMap{};              // map_d, red channel multiplies alpha
+        // Tangent-space normal map (norm, or map_Bump height maps converted on load), linear color space,
+        // OpenGL convention: green points toward the top of the image. Needs mesh tangents.
+        std::shared_ptr<Texture> normalMap{};
+        float                    normalScale = 1.f;         // Bumpiness: scales the map's x/y
 
         AlphaMode alphaMode   = AlphaMode::Opaque;
         float     alphaCutoff = 0.5f;

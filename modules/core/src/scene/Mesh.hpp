@@ -25,6 +25,7 @@ namespace k3
         std::vector<Math::Vector3f> normals{};
         std::vector<Math::Vector2f> uvs{};
         std::vector<Math::Color>    colors{};
+        std::vector<Math::Vector4f> tangents{};  // xyz: direction of +u, w: handedness (+-1). For normal maps
         std::vector<std::uint32_t>  indices{};   // Empty: positions are read three by three
 
         [[nodiscard]] std::size_t vertexCount() const noexcept { return positions.size(); }
@@ -39,6 +40,7 @@ namespace k3
         [[nodiscard]] bool hasNormals() const noexcept { return !positions.empty() && normals.size() == positions.size(); }
         [[nodiscard]] bool hasUVs() const noexcept { return !positions.empty() && uvs.size() == positions.size(); }
         [[nodiscard]] bool hasColors() const noexcept { return !positions.empty() && colors.size() == positions.size(); }
+        [[nodiscard]] bool hasTangents() const noexcept { return !positions.empty() && tangents.size() == positions.size(); }
 
         // Attribute sizes are consistent and every index is in range.
         [[nodiscard]] bool valid() const noexcept;
@@ -47,6 +49,11 @@ namespace k3
 
         // Smooth, area-weighted vertex normals (replaces the existing ones).
         void computeNormals();
+
+        // Per-vertex tangent frames from the uvs, for normal mapping (needs normals and uvs; replaces the
+        // existing tangents). The bitangent, cross(normal, tangent) * w, points toward the top of the
+        // texture: the OpenGL normal map convention.
+        void computeTangents();
     };
 
 }
