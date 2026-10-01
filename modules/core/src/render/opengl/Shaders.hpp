@@ -81,13 +81,16 @@ uniform float uLightRange[MAX_LIGHTS];
 uniform float uLightCosInner[MAX_LIGHTS];
 uniform float uLightCosOuter[MAX_LIGHTS];
 
-uniform int       uShadowLight;
-uniform sampler2D uShadowMap;
-uniform mat4      uShadowViewProjection;
-uniform int       uShadowSize;
-uniform float     uShadowDepthBias;
-uniform float     uShadowNormalOffset;
-uniform int       uShadowPcfRadius;
+const int MAX_CASCADES = 4;
+uniform int            uShadowLight;
+uniform int            uShadowCascadeCount;
+uniform sampler2DArray uShadowMap;
+uniform mat4           uShadowViewProjection[MAX_CASCADES];
+uniform float          uShadowNormalOffset[MAX_CASCADES];
+uniform float          uShadowSplit[MAX_CASCADES];
+uniform int            uShadowSize;
+uniform float          uShadowDepthBias;
+uniform int            uShadowPcfRadius;
 
 // Draw
 uniform vec4      uDiffuse;
@@ -110,8 +113,14 @@ uniform sampler2D uNormalMap;
 
 float shadowVisibility(vec3 position, vec3 normal)
 {
+    // First cascade reaching this view distance (uViewDirection is minus the camera's forward axis).
+    float distance = dot(position - uCameraPosition, -uViewDirection);
+    int cascade = 0;
+    while (cascade + 1 < uShadowCascadeCount && distance > uShadowSplit[cascade])
+        ++cascade;
+
     // The light's projection is orthographic: w = 1, no divide needed.
-    vec4 clip = uShadowViewProjection * vec4(position + normal * uShadowNormalOffset, 1.0);
+    vec4 clip = uShadowViewProjection[cascade] * vec4(position + normal * uShadowNormalOffset[cascade], 1.0);
     float u = clip.x * 0.5 + 0.5;
     float v = 0.5 - clip.y * 0.5;
     float depth = clip.z * 0.5 + 0.5 - uShadowDepthBias;
@@ -129,7 +138,7 @@ float shadowVisibility(vec3 position, vec3 normal)
         for (int dx = -uShadowPcfRadius; dx <= uShadowPcfRadius; ++dx) {
             int x = clamp(cx + dx, 0, uShadowSize - 1);
             // v grows downward, texture rows upward.
-            lit += depth <= texelFetch(uShadowMap, ivec2(x, uShadowSize - 1 - y), 0).r ? 1 : 0;
+            lit += depth <= texelFetch(uShadowMap, ivec3(x, uShadowSize - 1 - y, cascade), 0).r ? 1 : 0;
             ++taps;
         }
     }

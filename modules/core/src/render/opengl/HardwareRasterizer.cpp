@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdio>
+#include <iterator>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -125,6 +126,7 @@ namespace
         GLint cameraPosition, viewDirection, orthographic, ambient;
         GLint lightCount, lightType, lightPosition, lightToLight, lightDirection, lightRadiance, lightRange, lightCosInner, lightCosOuter;
         GLint shadowLight, shadowMap, shadowViewProjection, shadowSize, shadowDepthBias, shadowNormalOffset, shadowPcfRadius;
+        GLint shadowCascadeCount, shadowSplit;
         GLint diffuse, specular, emissive, shininess, unlit, alphaMode, alphaCutoff;
         GLint hasNormals, hasDiffuseMap, hasSpecularMap, hasOpacityMap, diffuseMap, specularMap, opacityMap;
         GLint handedness, hasNormalMap, normalScale, normalMap;
@@ -141,6 +143,7 @@ namespace
               shadowViewProjection(p.uniform("uShadowViewProjection")), shadowSize(p.uniform("uShadowSize")),
               shadowDepthBias(p.uniform("uShadowDepthBias")), shadowNormalOffset(p.uniform("uShadowNormalOffset")),
               shadowPcfRadius(p.uniform("uShadowPcfRadius")),
+              shadowCascadeCount(p.uniform("uShadowCascadeCount")), shadowSplit(p.uniform("uShadowSplit")),
               diffuse(p.uniform("uDiffuse")), specular(p.uniform("uSpecular")), emissive(p.uniform("uEmissive")),
               shininess(p.uniform("uShininess")), unlit(p.uniform("uUnlit")), alphaMode(p.uniform("uAlphaMode")),
               alphaCutoff(p.uniform("uAlphaCutoff")), hasNormals(p.uniform("uHasNormals")),
@@ -205,8 +208,9 @@ struct k3::HardwareRasterizer::Impl
     std::uint32_t renderWidth = 0, renderHeight = 0;    // Twice the output with SSAA
     GLuint fbo = 0, colorTexture = 0, depthTexture = 0;
     GLuint postFbo = 0, postTexture = 0;                // Anti-aliased frame
-    GLuint shadowFbo = 0, shadowTexture = 0;
+    GLuint shadowFbo = 0, shadowTexture = 0;           // Texture array: one layer per cascade
     std::uint32_t shadowSize = 0;
+    std::size_t shadowLayers = 0;
     std::optional<std::uint32_t> presentFramebuffer = 0u;
 
     std::unordered_map<const Mesh*, GpuMesh>       meshes;
@@ -312,23 +316,25 @@ struct k3::HardwareRasterizer::Impl
         Disable(FRAMEBUFFER_SRGB);
     }
 
-    void ensureShadowTarget(std::uint32_t size)
+    void ensureShadowTarget(std::uint32_t size, std::size_t layers)
     {
-        if (size == shadowSize && shadowFbo)
+        if (!shadowFbo)
+            GenFramebuffers(1, &shadowFbo);
+        if (size == shadowSize && layers == shadowLayers && shadowTexture)
             return;
         if (shadowTexture)
             DeleteTextures(1, &shadowTexture);
-        if (!shadowFbo)
-            GenFramebuffers(1, &shadowFbo);
 
         shadowSize = size;
-        shadowTexture = makeTexture(static_cast<GLint>(DEPTH_COMPONENT32F), size, size, DEPTH_COMPONENT, FLOAT);
-        BindFramebuffer(FRAMEBUFFER, shadowFbo);
-        FramebufferTexture2D(FRAMEBUFFER, DEPTH_ATTACHMENT, TEXTURE_2D, shadowTexture, 0);
-        DrawBuffer(NONE);
-        ReadBuffer(NONE);
-        if (CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE)
-            log(LogLevel::Error, "OpenGL: incomplete shadow map {}x{}", size, size);
+        shadowLayers = layers;
+        GenTextures(1, &shadowTexture);
+        BindTexture(TEXTURE_2D_ARRAY, shadowTexture);
+        TexImage3D(TEXTURE_2D_ARRAY, 0, static_cast<GLint>(DEPTH_COMPONENT32F), static_cast<GLsizei>(size), static_cast<GLsizei>(size), static_cast<GLsizei>(layers), 0, DEPTH_COMPONENT, FLOAT, nullptr);
+        TexParameteri(TEXTURE_2D_ARRAY, TEXTURE_MIN_FILTER, NEAREST);
+        TexParameteri(TEXTURE_2D_ARRAY, TEXTURE_MAG_FILTER, NEAREST);
+        TexParameteri(TEXTURE_2D_ARRAY, TEXTURE_MAX_LEVEL, 0);
+        TexParameteri(TEXTURE_2D_ARRAY, TEXTURE_WRAP_S, CLAMP_TO_EDGE);
+        TexParameteri(TEXTURE_2D_ARRAY, TEXTURE_WRAP_T, CLAMP_TO_EDGE);
     }
 
     /* Resource cache */
@@ -501,23 +507,15 @@ struct k3::HardwareRasterizer::Impl
         DrawElements(TRIANGLES, gpu.count, UNSIGNED_INT, nullptr);
     }
 
-    // Returns the index of the shadow-casting light if a shadow map was rendered, -1 otherwise.
-    int renderShadows(const sw::ShadingContext& lights, std::size_t firstBlended, ShadowProjection& projection)
+    // Renders one shadow map per cascade. Returns the index of the shadow-casting light if they were
+    // rendered, -1 otherwise.
+    int renderShadows(const sw::ShadingContext& lights, std::size_t firstBlended, std::vector<ShadowCascade>& cascades)
     {
         const ShadowSettings& settings = environment.shadows;
 
+        cascades.clear();
         if (lights.shadowLight < 0 || settings.resolution == 0)
             return -1;
-
-        Math::Bounds3f bounds = settings.bounds;
-        if (bounds.empty())
-            for (const DrawCommand& command : commands)
-                bounds.merge(command.bounds);
-
-        const auto fitted = fitShadowProjection(bounds, lights.lights[lights.shadowLight].direction);
-        if (!fitted)
-            return -1;
-        projection = *fitted;
 
         bool anyCaster = false;
         for (std::size_t d = 0; d < firstBlended; ++d)
@@ -525,12 +523,22 @@ struct k3::HardwareRasterizer::Impl
         if (!anyCaster)
             return -1;
 
-        ensureShadowTarget(settings.resolution);
+        Math::Bounds3f sceneBounds;
+        for (const DrawCommand& command : commands)
+            sceneBounds.merge(command.bounds);
+
+        const float aspect = height ? static_cast<float>(width) / height : 1.f;
+        cascades = fitShadowCascades(settings, camera, aspect, sceneBounds, lights.lights[lights.shadowLight].direction);
+        if (cascades.empty())
+            return -1;
+
+        ensureShadowTarget(settings.resolution, cascades.size());
         BindFramebuffer(FRAMEBUFFER, shadowFbo);
+        DrawBuffer(NONE);
+        ReadBuffer(NONE);
         Viewport(0, 0, static_cast<GLsizei>(settings.resolution), static_cast<GLsizei>(settings.resolution));
         DepthMask(TRUE_);
         ClearDepth(1.0);
-        Clear(DEPTH_BUFFER_BIT);
         // Both faces, like the software backend: thin single-sided geometry still casts.
         Disable(CULL_FACE);
         Disable(BLEND);
@@ -538,32 +546,39 @@ struct k3::HardwareRasterizer::Impl
         DepthFunc(LESS);
 
         UseProgram(shadow.id());
-        setMatrix(shadowUniforms.viewProjection, projection.viewProjection);
         Uniform1i(shadowUniforms.diffuseMap, DIFFUSE_UNIT);
         Uniform1i(shadowUniforms.opacityMap, OPACITY_UNIT);
 
-        for (std::size_t d = 0; d < firstBlended; ++d) {
-            const DrawCommand& command = commands[d];
-            const Material& material = materialOf(command);
+        for (std::size_t c = 0; c < cascades.size(); ++c) {
+            FramebufferTextureLayer(FRAMEBUFFER, DEPTH_ATTACHMENT, shadowTexture, 0, static_cast<GLint>(c));
+            if (c == 0 && CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE)
+                log(LogLevel::Error, "OpenGL: incomplete shadow map {}x{}", settings.resolution, settings.resolution);
+            Clear(DEPTH_BUFFER_BIT);
+            setMatrix(shadowUniforms.viewProjection, cascades[c].viewProjection);
 
-            if (!material.castShadows)
-                continue;
+            for (std::size_t d = 0; d < firstBlended; ++d) {
+                const DrawCommand& command = commands[d];
+                const Material& material = materialOf(command);
 
-            const bool alphaTest = material.alphaMode == AlphaMode::Mask;
-            setMatrix(shadowUniforms.model, command.transform);
-            Uniform1i(shadowUniforms.alphaTest, alphaTest);
-            if (alphaTest) {
-                Uniform1f(shadowUniforms.diffuseAlpha, material.diffuse.a);
-                Uniform1f(shadowUniforms.alphaCutoff, material.alphaCutoff);
-                Uniform1i(shadowUniforms.hasDiffuseMap, bindTexture(DIFFUSE_UNIT, material.diffuseMap));
-                Uniform1i(shadowUniforms.hasOpacityMap, bindTexture(OPACITY_UNIT, material.opacityMap));
+                if (!material.castShadows)
+                    continue;
+
+                const bool alphaTest = material.alphaMode == AlphaMode::Mask;
+                setMatrix(shadowUniforms.model, command.transform);
+                Uniform1i(shadowUniforms.alphaTest, alphaTest);
+                if (alphaTest) {
+                    Uniform1f(shadowUniforms.diffuseAlpha, material.diffuse.a);
+                    Uniform1f(shadowUniforms.alphaCutoff, material.alphaCutoff);
+                    Uniform1i(shadowUniforms.hasDiffuseMap, bindTexture(DIFFUSE_UNIT, material.diffuseMap));
+                    Uniform1i(shadowUniforms.hasOpacityMap, bindTexture(OPACITY_UNIT, material.opacityMap));
+                }
+                drawMesh(*command.gpu);
             }
-            drawMesh(*command.gpu);
         }
         return lights.shadowLight;
     }
 
-    void setFrameUniforms(const sw::ShadingContext& lights, int shadowLight, const ShadowProjection& projection)
+    void setFrameUniforms(const sw::ShadingContext& lights, int shadowLight, const std::vector<ShadowCascade>& cascades)
     {
         const auto& u = meshUniforms;
         GLint types[MAX_LIGHTS]{};
@@ -612,13 +627,22 @@ struct k3::HardwareRasterizer::Impl
         Uniform1i(u.shadowLight, shadowLight);
         if (shadowLight >= 0) {
             const ShadowSettings& settings = environment.shadows;
+            GLfloat matrices[MAX_SHADOW_CASCADES * 16]{}, offsets[MAX_SHADOW_CASCADES]{}, splits[MAX_SHADOW_CASCADES]{};
+
+            for (std::size_t c = 0; c < cascades.size(); ++c) {
+                std::copy(std::begin(cascades[c].viewProjection.values), std::end(cascades[c].viewProjection.values), matrices + c * 16);
+                offsets[c] = settings.normalBias * cascades[c].texelSize;
+                splits[c] = cascades[c].splitDistance;
+            }
 
             ActiveTexture(TEXTURE0 + SHADOW_UNIT);
-            BindTexture(TEXTURE_2D, shadowTexture);
-            setMatrix(u.shadowViewProjection, projection.viewProjection);
+            BindTexture(TEXTURE_2D_ARRAY, shadowTexture);
+            Uniform1i(u.shadowCascadeCount, static_cast<GLint>(cascades.size()));
+            UniformMatrix4fv(u.shadowViewProjection, static_cast<GLsizei>(cascades.size()), TRUE_, matrices);
+            Uniform1fv(u.shadowNormalOffset, static_cast<GLsizei>(cascades.size()), offsets);
+            Uniform1fv(u.shadowSplit, static_cast<GLsizei>(cascades.size()), splits);
             Uniform1i(u.shadowSize, static_cast<GLint>(settings.resolution));
             Uniform1f(u.shadowDepthBias, settings.depthBias);
-            Uniform1f(u.shadowNormalOffset, settings.normalBias * 2.f * projection.radius / static_cast<float>(settings.resolution));
             Uniform1i(u.shadowPcfRadius, std::max(settings.pcfRadius, 0));
         }
     }
@@ -838,11 +862,11 @@ void k3::HardwareRasterizer::endFrame()
     const auto blendedStart = static_cast<std::size_t>(firstBlended - impl.commands.begin());
 
     const sw::ShadingContext lights = sw::ShadingContext::prepare(impl.camera, impl.environment);
-    ShadowProjection projection{Math::Matrix4::identity(), 0.f};
-    const int shadowLight = impl.renderShadows(lights, blendedStart, projection);
+    std::vector<ShadowCascade> cascades;
+    const int shadowLight = impl.renderShadows(lights, blendedStart, cascades);
 
     gl::UseProgram(impl.mesh.id());
-    impl.setFrameUniforms(lights, shadowLight, projection);
+    impl.setFrameUniforms(lights, shadowLight, cascades);
     impl.renderMain(blendedStart);
     impl.antiAlias();
     impl.present();

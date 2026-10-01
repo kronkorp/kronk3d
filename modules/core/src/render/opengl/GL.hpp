@@ -57,6 +57,7 @@ namespace k3::gl
     inline constexpr GLenum PACK_ALIGNMENT          = 0x0D05;
     inline constexpr GLenum UNPACK_ALIGNMENT        = 0x0CF5;
     inline constexpr GLenum TEXTURE_2D              = 0x0DE1;
+    inline constexpr GLenum TEXTURE_2D_ARRAY        = 0x8C1A;
     inline constexpr GLenum UNSIGNED_BYTE           = 0x1401;
     inline constexpr GLenum UNSIGNED_INT            = 0x1405;
     inline constexpr GLenum FLOAT                   = 0x1406;
@@ -128,6 +129,7 @@ namespace k3::gl
         X(BindTexture,              void,           (GLenum, GLuint)) \
         X(ActiveTexture,            void,           (GLenum)) \
         X(TexImage2D,               void,           (GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*)) \
+        X(TexImage3D,               void,           (GLenum, GLint, GLint, GLsizei, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*)) \
         X(TexParameteri,            void,           (GLenum, GLenum, GLint)) \
         X(GenBuffers,               void,           (GLsizei, GLuint*)) \
         X(DeleteBuffers,            void,           (GLsizei, const GLuint*)) \
@@ -171,6 +173,7 @@ namespace k3::gl
         X(DeleteFramebuffers,       void,           (GLsizei, const GLuint*)) \
         X(BindFramebuffer,          void,           (GLenum, GLuint)) \
         X(FramebufferTexture2D,     void,           (GLenum, GLenum, GLenum, GLuint, GLint)) \
+        X(FramebufferTextureLayer,  void,           (GLenum, GLenum, GLuint, GLint, GLint)) \
         X(CheckFramebufferStatus,   GLenum,         (GLenum)) \
         X(BlitFramebuffer,          void,           (GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum)) \
         X(DrawBuffer,               void,           (GLenum)) \
