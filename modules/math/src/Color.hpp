@@ -6,8 +6,21 @@
 */
 #pragma once
 
+#include <cmath>
+
 namespace k3::Math
 {
+
+    // Exact sRGB transfer functions (IEC 61966-2-1).
+    inline float srgbToLinear(float c)
+    {
+        return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+    }
+
+    inline float linearToSrgb(float c)
+    {
+        return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.f / 2.4f) - 0.055f;
+    }
 
     struct Color
     {
@@ -16,6 +29,12 @@ namespace k3::Math
         static inline Color fromRGB(unsigned char r, unsigned char g, unsigned char b, unsigned char a = 255)
         {
             return Color(r / 255.f, g / 255.f, b / 255.f, a / 255.f);
+        }
+
+        // Renderers work in linear space: use this for colors picked in an image editor / color picker.
+        static inline Color fromSRGB(unsigned char r, unsigned char g, unsigned char b, unsigned char a = 255)
+        {
+            return Color(srgbToLinear(r / 255.f), srgbToLinear(g / 255.f), srgbToLinear(b / 255.f), a / 255.f);
         }
 
         static const Color Black;

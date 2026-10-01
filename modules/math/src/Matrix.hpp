@@ -90,28 +90,29 @@ namespace k3::Math
 			};
 		}
 
-		static Matrix4 perspective(float near, float far, float fovY, float aspect_ratio)
+		static Matrix4 perspective(float zNear, float zFar, float fovY, float aspect_ratio)
 		{
-			float top = near * std::tan(fovY / 2.f);
+			float top = zNear * std::tan(fovY / 2.f);
 			float right = top * aspect_ratio;
 
 			return Matrix4
 			{
-				near / right, 0.f, 0.f, 0.f,
-				0.f, near / top, 0.f, 0.f,
-				0.f, 0.f, -(far + near) / (far - near), - 2.f * far * near / (far - near),
+				zNear / right, 0.f, 0.f, 0.f,
+				0.f, zNear / top, 0.f, 0.f,
+				0.f, 0.f, -(zFar + zNear) / (zFar - zNear), - 2.f * zFar * zNear / (zFar - zNear),
 				0.f, 0.f, -1.f, 0.f,
 			};
 		}
 
+		// (zNear / zFar: <windows.h> defines `near` and `far` as macros.)
 		// OpenGL-style orthographic projection: maps the box to NDC, z in [-1, 1].
-		static Matrix4 orthographic(float left, float right, float bottom, float top, float near, float far)
+		static Matrix4 orthographic(float left, float right, float bottom, float top, float zNear, float zFar)
 		{
 			return Matrix4
 			{
 				2.f / (right - left), 0.f, 0.f, -(right + left) / (right - left),
 				0.f, 2.f / (top - bottom), 0.f, -(top + bottom) / (top - bottom),
-				0.f, 0.f, -2.f / (far - near), -(far + near) / (far - near),
+				0.f, 0.f, -2.f / (zFar - zNear), -(zFar + zNear) / (zFar - zNear),
 				0.f, 0.f, 0.f, 1.f,
 			};
 		}
