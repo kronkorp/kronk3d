@@ -5,6 +5,8 @@ project(kronk3d LANGUAGES CXX)
 
 file(GLOB_RECURSE SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 
+find_package(Threads REQUIRED)
+
 ###
 
 # Sources are compiled once (with PIC) and shared by the static and shared flavours.
@@ -12,7 +14,7 @@ add_library(kronk3d_objects OBJECT ${SOURCES})
 apply_project_settings(kronk3d_objects)
 set_target_properties(kronk3d_objects PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(kronk3d_objects PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/)
-target_link_libraries(kronk3d_objects PUBLIC math PRIVATE logger)
+target_link_libraries(kronk3d_objects PUBLIC math Threads::Threads PRIVATE logger)
 
 add_library(kronk3d_shared SHARED $<TARGET_OBJECTS:kronk3d_objects>)
 add_library(kronk3d_static STATIC $<TARGET_OBJECTS:kronk3d_objects>)
@@ -20,7 +22,7 @@ add_library(kronk3d_static STATIC $<TARGET_OBJECTS:kronk3d_objects>)
 foreach(target kronk3d_shared kronk3d_static)
     apply_project_settings(${target})
     target_include_directories(${target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/)
-    target_link_libraries(${target} PUBLIC math PRIVATE logger)
+    target_link_libraries(${target} PUBLIC math Threads::Threads PRIVATE logger)
     set_target_properties(${target} PROPERTIES OUTPUT_NAME kronk3d)
 endforeach()
 

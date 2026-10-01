@@ -35,8 +35,6 @@ namespace k3::sw
     inline constexpr std::int64_t SUBPIXEL_ONE  = std::int64_t{1} << SUBPIXEL_BITS;
     inline constexpr std::int64_t SUBPIXEL_HALF = SUBPIXEL_ONE / 2;
 
-    inline constexpr std::uint32_t NO_TRIANGLE = 0xFFFFFFFFu;
-
     // Everything a draw's triangles share.
     struct DrawState
     {

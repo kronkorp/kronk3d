@@ -17,10 +17,11 @@ namespace k3
 
     // Tile-based CPU rasterizer. Per tile, opaque geometry first fills a visibility buffer (depth +
     // triangle id), every visible pixel is then shaded exactly once, and blended geometry is drawn on
-    // top, back to front.
+    // top, back to front. Vertex processing, triangle setup and tiles are spread over a thread pool.
     class SoftwareRasterizer final : public IRasterizer
     {
         public:
+            // `threads` counts the calling thread; 0 means one per hardware thread, 1 renders single-threaded.
             SoftwareRasterizer(std::uint32_t width, std::uint32_t height, unsigned threads = 0);
             ~SoftwareRasterizer() override;
 
@@ -33,6 +34,7 @@ namespace k3
             void resize(std::uint32_t width, std::uint32_t height) override;
             [[nodiscard]] std::uint32_t width() const noexcept override;
             [[nodiscard]] std::uint32_t height() const noexcept override;
+            [[nodiscard]] unsigned threadCount() const noexcept;
 
             void beginFrame(const Camera& camera, const Environment& environment) override;
             using IRasterizer::draw;
