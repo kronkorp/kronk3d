@@ -218,3 +218,30 @@ K3_TEST(factory_creates_the_software_backend)
     K3_CHECK((*rasterizer)->backend() == k3::Backend::Software);
     K3_CHECK((*rasterizer)->width() == 16 && (*rasterizer)->height() == 8);
 }
+
+K3_TEST(software_double_sided_blended_mesh_draws_back_faces_first)
+{
+    // One mesh, near quad (facing the camera) listed before the far quad (facing away).
+    auto box = std::make_shared<k3::Mesh>(k3::Mesh{
+        .positions = {
+            {-1.f, -1.f, 0.5f}, {1.f, -1.f, 0.5f}, {1.f, 1.f, 0.5f}, {-1.f, 1.f, 0.5f},
+            {-1.f, -1.f, -0.5f}, {1.f, -1.f, -0.5f}, {1.f, 1.f, -0.5f}, {-1.f, 1.f, -0.5f},
+        },
+        .colors = {
+            k3::Math::Color::Red, k3::Math::Color::Red, k3::Math::Color::Red, k3::Math::Color::Red,
+            k3::Math::Color::Green, k3::Math::Color::Green, k3::Math::Color::Green, k3::Math::Color::Green,
+        },
+        .indices = {0, 1, 2, 0, 2, 3, 4, 6, 5, 4, 7, 6},
+    });
+    auto glass = solid({1.f, 1.f, 1.f, 0.5f}, k3::AlphaMode::Blend);
+    glass->doubleSided = true;
+
+    k3::SoftwareRasterizer rasterizer(SIZE, SIZE);
+    rasterizer.beginFrame(orthoCamera(), blackEnvironment());
+    rasterizer.draw(box, glass, k3::Math::Matrix4::identity());
+    rasterizer.endFrame();
+
+    // Red (near) over green (far): not green over red.
+    K3_CHECK_NEAR(center(rasterizer).r, 0.5f, 1e-6f);
+    K3_CHECK_NEAR(center(rasterizer).g, 0.25f, 1e-6f);
+}

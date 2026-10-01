@@ -28,6 +28,13 @@ namespace
         return material;
     }
 
+    // Which faces a geometry pass keeps.
+    enum class Faces {
+        All,
+        Front,
+        Back
+    };
+
     bool isBlended(const DrawCommand& command)
     {
         return command.material && command.material->alphaMode == k3::AlphaMode::Blend;
@@ -107,7 +114,7 @@ struct k3::SoftwareRasterizer::Impl
 
     /* Geometry: vertex transform, clipping, triangle setup */
 
-    void geometry(const DrawCommand& command)
+    void geometry(const DrawCommand& command, Faces faces)
     {
         const Mesh& mesh = *command.mesh;
         const Material& material = command.material ? *command.material : defaultMaterial();
@@ -161,7 +168,7 @@ struct k3::SoftwareRasterizer::Impl
 
             const std::size_t count = sw::clipTriangle(a, b, c, polygon);
             for (std::size_t k = 1; k + 1 < count; ++k)
-                setupTriangle(polygon[0], polygon[k], polygon[k + 1], drawIndex, material.doubleSided);
+                setupTriangle(polygon[0], polygon[k], polygon[k + 1], drawIndex, faces);
         }
     }
 
@@ -179,7 +186,7 @@ struct k3::SoftwareRasterizer::Impl
         }
     }
 
-    void setupTriangle(const sw::ClipVertex& v0, const sw::ClipVertex& v1, const sw::ClipVertex& v2, std::uint32_t drawIndex, bool doubleSided)
+    void setupTriangle(const sw::ClipVertex& v0, const sw::ClipVertex& v1, const sw::ClipVertex& v2, std::uint32_t drawIndex, Faces faces)
     {
         const sw::ClipVertex* in[3] = {&v0, &v1, &v2};
         std::int64_t x[3], y[3];
@@ -199,7 +206,7 @@ struct k3::SoftwareRasterizer::Impl
 
         // y points down on screen: counter-clockwise in NDC (front facing) has a negative area here.
         const bool frontFacing = area < 0;
-        if (!frontFacing && !doubleSided)
+        if ((faces == Faces::Front && !frontFacing) || (faces == Faces::Back && frontFacing))
             return;
 
         int order[3] = {0, 1, 2};
@@ -455,10 +462,15 @@ void k3::SoftwareRasterizer::endFrame()
     impl.drawStates.clear();
     impl.triangles.clear();
     for (auto it = impl.commands.begin(); it != firstBlended; ++it)
-        impl.geometry(*it);
+        impl.geometry(*it, it->material && it->material->doubleSided ? Faces::All : Faces::Front);
     impl.firstBlendTriangle = static_cast<std::uint32_t>(impl.triangles.size());
-    for (auto it = firstBlended; it != impl.commands.end(); ++it)
-        impl.geometry(*it);
+    // A double-sided blended mesh (a glass box) shows its inside through its outside: draw the faces
+    // turned away from the camera first, so they end up behind whatever the triangle order is.
+    for (auto it = firstBlended; it != impl.commands.end(); ++it) {
+        if (it->material->doubleSided)
+            impl.geometry(*it, Faces::Back);
+        impl.geometry(*it, Faces::Front);
+    }
 
     impl.bin();
     for (std::uint32_t ty = 0; ty < impl.tilesY; ++ty)
