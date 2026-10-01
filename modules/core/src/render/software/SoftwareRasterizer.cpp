@@ -70,6 +70,13 @@ namespace
         std::size_t   first, last;          // Index range, multiple of 3
     };
 
+    // Pixel bounds of a triangle, stored apart so binning streams 16 bytes per triangle instead of the
+    // whole triangle.
+    struct TriangleBounds
+    {
+        std::int32_t minX, minY, maxX, maxY;
+    };
+
     // Triangles overlapping a tile, in submission order.
     struct TileBin
     {
@@ -87,6 +94,7 @@ namespace
         std::vector<VertexJob>                       vertexJobs;
         std::vector<GeometryJob>                     geometryJobs;
         std::vector<std::vector<k3::sw::Triangle>>   jobTriangles;  // Output of each geometry job (stable during the frame)
+        std::vector<std::vector<TriangleBounds>>     jobBounds;     // Same order as jobTriangles
         std::vector<TileBin>                         bins;
 
         void setSize(std::uint32_t w, std::uint32_t h)
@@ -131,6 +139,9 @@ namespace
     }
 
     // Calls fn(x, y, edges) for every pixel of `t` inside the [x0, x1] x [y0, y1] rectangle.
+    //
+    // Rather than testing every pixel of the bounding box (mostly empty for long thin triangles), each
+    // row solves E_i(x) >= 0 for x: edge functions are affine, so the covered pixels form one exact span.
     template<typename Fn>
     void forEachCoveredPixel(const k3::sw::Triangle& t, std::int32_t x0, std::int32_t y0, std::int32_t x1, std::int32_t y1, Fn&& fn)
     {
@@ -147,20 +158,42 @@ namespace
         const std::int64_t stepY[3] = {t.edgeB[0] * k3::sw::SUBPIXEL_ONE, t.edgeB[1] * k3::sw::SUBPIXEL_ONE, t.edgeB[2] * k3::sw::SUBPIXEL_ONE};
 
         for (std::int32_t y = ys; y <= ye; ++y) {
-            std::int64_t e[3] = {row[0], row[1], row[2]};
+            // Offsets from xs of the first and last covered pixels.
+            std::int64_t first = 0, last = xe - xs;
 
-            for (std::int32_t x = xs; x <= xe; ++x) {
-                // Inside when no edge function is negative: a single sign-bit test.
-                if ((e[0] | e[1] | e[2]) >= 0)
-                    fn(x, y, e);
-                e[0] += stepX[0];
-                e[1] += stepX[1];
-                e[2] += stepX[2];
+            for (int i = 0; i < 3 && first <= last; ++i) {
+                if (stepX[i] > 0) {
+                    // Increasing edge: covered from the first x where it becomes >= 0.
+                    if (row[i] < 0)
+                        first = std::max(first, (-row[i] + stepX[i] - 1) / stepX[i]);
+                } else if (stepX[i] < 0) {
+                    // Decreasing edge: covered until it becomes < 0.
+                    last = row[i] < 0 ? -1 : std::min(last, row[i] / -stepX[i]);
+                } else if (row[i] < 0) {
+                    last = -1;
+                }
+            }
+
+            if (first <= last) {
+                std::int64_t e[3] = {row[0] + first * stepX[0], row[1] + first * stepX[1], row[2] + first * stepX[2]};
+
+                for (std::int64_t x = xs + first; x <= xs + last; ++x) {
+                    fn(static_cast<std::int32_t>(x), y, e);
+                    e[0] += stepX[0];
+                    e[1] += stepX[1];
+                    e[2] += stepX[2];
+                }
             }
             row[0] += stepY[0];
             row[1] += stepY[1];
             row[2] += stepY[2];
         }
+    }
+
+    // Round half away from zero, inline (std::llround is an out-of-line libm call).
+    std::int64_t roundToInt(float value) noexcept
+    {
+        return static_cast<std::int64_t>(value + (value >= 0.f ? 0.5f : -0.5f));
     }
 
 }
@@ -277,16 +310,24 @@ struct k3::SoftwareRasterizer::Impl
 
     void runGeometry(Pass& pass)
     {
-        if (pass.jobTriangles.size() < pass.geometryJobs.size())
+        if (pass.jobTriangles.size() < pass.geometryJobs.size()) {
             pass.jobTriangles.resize(pass.geometryJobs.size());
-        for (std::size_t j = 0; j < pass.geometryJobs.size(); ++j)
+            pass.jobBounds.resize(pass.geometryJobs.size());
+        }
+        for (std::size_t j = 0; j < pass.geometryJobs.size(); ++j) {
             pass.jobTriangles[j].clear();
+            pass.jobBounds[j].clear();
+        }
 
         pool.parallelFor(pass.vertexJobs.size(), [&](std::size_t j) {
             transformVertices(pass, pass.vertexJobs[j]);
         });
         pool.parallelFor(pass.geometryJobs.size(), [&](std::size_t j) {
             assemble(pass, pass.geometryJobs[j], pass.jobTriangles[j]);
+
+            pass.jobBounds[j].reserve(pass.jobTriangles[j].size());
+            for (const sw::Triangle& t : pass.jobTriangles[j])
+                pass.jobBounds[j].push_back({t.minX, t.minY, t.maxX, t.maxY});
         });
         bin(pass);
     }
@@ -376,8 +417,8 @@ struct k3::SoftwareRasterizer::Impl
         for (int i = 0; i < 3; ++i) {
             const auto& p = in[i]->position;
             invW[i] = 1.f / p.w;
-            x[i] = std::llround((p.x * invW[i] * 0.5f + 0.5f) * pass.width * sw::SUBPIXEL_ONE);
-            y[i] = std::llround((0.5f - p.y * invW[i] * 0.5f) * pass.height * sw::SUBPIXEL_ONE);
+            x[i] = roundToInt((p.x * invW[i] * 0.5f + 0.5f) * pass.width * sw::SUBPIXEL_ONE);
+            y[i] = roundToInt((0.5f - p.y * invW[i] * 0.5f) * pass.height * sw::SUBPIXEL_ONE);
             z[i] = p.z * invW[i] * 0.5f + 0.5f;
         }
 
@@ -448,26 +489,35 @@ struct k3::SoftwareRasterizer::Impl
         out.push_back(t);
     }
 
-    // Sequential, walking the jobs in drawing order: bins keep the submission order blending relies on.
-    static void bin(Pass& pass)
+    // Each worker fills one row of tiles, walking the jobs in drawing order: bins keep the submission
+    // order blending relies on, and no two workers write to the same bin.
+    void bin(Pass& pass)
     {
-        for (auto& tile : pass.bins) {
-            tile.opaque.clear();
-            tile.blended.clear();
-        }
+        pool.parallelFor(pass.tilesY, [&](std::size_t tileRow) {
+            const auto ty = static_cast<std::int32_t>(tileRow);
+            const std::int32_t rowTop = ty * TILE_SIZE, rowBottom = rowTop + TILE_SIZE - 1;
+            TileBin* row = &pass.bins[tileRow * pass.tilesX];
 
-        for (std::size_t j = 0; j < pass.geometryJobs.size(); ++j) {
-            const bool blended = pass.geometryJobs[j].blended;
+            for (std::uint32_t tx = 0; tx < pass.tilesX; ++tx) {
+                row[tx].opaque.clear();
+                row[tx].blended.clear();
+            }
 
-            for (const sw::Triangle& t : pass.jobTriangles[j]) {
-                for (std::int32_t ty = t.minY / TILE_SIZE; ty <= t.maxY / TILE_SIZE; ++ty) {
-                    for (std::int32_t tx = t.minX / TILE_SIZE; tx <= t.maxX / TILE_SIZE; ++tx) {
-                        TileBin& tile = pass.bins[static_cast<std::size_t>(ty) * pass.tilesX + tx];
-                        (blended ? tile.blended : tile.opaque).push_back(&t);
-                    }
+            for (std::size_t j = 0; j < pass.geometryJobs.size(); ++j) {
+                const bool blended = pass.geometryJobs[j].blended;
+                const auto& bounds = pass.jobBounds[j];
+                const sw::Triangle* triangles = pass.jobTriangles[j].data();
+
+                for (std::size_t k = 0; k < bounds.size(); ++k) {
+                    const TriangleBounds& b = bounds[k];
+
+                    if (b.maxY < rowTop || b.minY > rowBottom)
+                        continue;
+                    for (std::int32_t tx = b.minX / TILE_SIZE; tx <= b.maxX / TILE_SIZE; ++tx)
+                        (blended ? row[tx].blended : row[tx].opaque).push_back(triangles + k);
                 }
             }
-        }
+        });
     }
 
     /* Bounds */
