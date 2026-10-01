@@ -26,6 +26,7 @@ namespace k3::sw
         Math::Vector2f uv;
         Math::Vector2f duvdx, duvdy;    // Screen-space derivatives of uv (mip level selection)
         Math::Color    color;           // Vertex color
+        Math::Vector4f tangent;         // xyz + handedness; zero when the draw has no normal map
         bool           frontFacing;
     };
 

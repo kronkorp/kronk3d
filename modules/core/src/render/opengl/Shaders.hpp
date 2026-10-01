@@ -15,6 +15,7 @@ namespace k3::gl::shaders
     inline constexpr unsigned NORMAL   = 1;
     inline constexpr unsigned UV       = 2;
     inline constexpr unsigned COLOR    = 3;
+    inline constexpr unsigned TANGENT  = 4;
 
     inline constexpr const char* MESH_VERTEX = R"glsl(
 #version 330 core
@@ -22,15 +23,18 @@ layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUV;
 layout(location = 3) in vec4 aColor;
+layout(location = 4) in vec4 aTangent;
 
-uniform mat4 uViewProjection;
-uniform mat4 uModel;
-uniform mat4 uNormalMatrix;
+uniform mat4  uViewProjection;
+uniform mat4  uModel;
+uniform mat4  uNormalMatrix;
+uniform float uHandedness;
 
 out vec3 vWorld;
 out vec3 vNormal;
 out vec2 vUV;
 out vec4 vColor;
+out vec4 vTangent;
 
 void main()
 {
@@ -40,6 +44,8 @@ void main()
     vNormal = mat3(uNormalMatrix) * aNormal;
     vUV = aUV;
     vColor = aColor;
+    // A mirroring transform flips the frame's handedness.
+    vTangent = vec4(mat3(uModel) * aTangent.xyz, aTangent.w * uHandedness);
     gl_Position = uViewProjection * world;
 }
 )glsl";
@@ -50,6 +56,7 @@ in vec3 vWorld;
 in vec3 vNormal;
 in vec2 vUV;
 in vec4 vColor;
+in vec4 vTangent;
 
 out vec4 fragColor;
 
@@ -97,6 +104,9 @@ uniform bool      uHasOpacityMap;
 uniform sampler2D uDiffuseMap;
 uniform sampler2D uSpecularMap;
 uniform sampler2D uOpacityMap;
+uniform bool      uHasNormalMap;
+uniform float     uNormalScale;
+uniform sampler2D uNormalMap;
 
 float shadowVisibility(vec3 position, vec3 normal)
 {
@@ -151,6 +161,15 @@ void main()
     } else {
         // Face normal, always turned toward the viewer.
         n = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
+    }
+
+    if (uHasNormalMap && vTangent.w != 0.0) {
+        // Tangent frame re-orthogonalized after interpolation; the map's x/y/z go along t/b/n.
+        vec3 t = normalize(vTangent.xyz - n * dot(n, vTangent.xyz));
+        vec3 b = cross(n, t) * (vTangent.w < 0.0 ? -1.0 : 1.0);
+        vec3 m = texture(uNormalMap, vUV).rgb * 2.0 - 1.0;
+
+        n = normalize(t * (m.x * uNormalScale) + b * (m.y * uNormalScale) + n * m.z);
     }
 
     vec3 v = uOrthographic ? uViewDirection : normalize(uCameraPosition - vWorld);

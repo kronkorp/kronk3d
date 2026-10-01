@@ -14,12 +14,14 @@
 namespace k3::sw
 {
 
-    // Per-vertex values interpolated across triangles, in this order.
+    // Per-vertex values interpolated across triangles, in this order. Colors and tangents come last:
+    // they are only interpolated by the draws that need them.
     enum Varying : int {
         WorldX, WorldY, WorldZ,
         NormalX, NormalY, NormalZ,
         TexU, TexV,
         ColorR, ColorG, ColorB, ColorA,
+        TangentX, TangentY, TangentZ, TangentW,
         VARYING_COUNT
     };
 
@@ -42,6 +44,7 @@ namespace k3::sw
         bool            alphaTest;
         bool            hasNormals; // Without normals, triangles are flat-shaded with their face normal
         bool            hasColors;  // Without vertex colors, fragments get exactly white (no interpolation rounding)
+        bool            normalMapped; // Normal map + normals + uvs + tangents
     };
 
     // A triangle after clipping, projection and setup, ready to be rasterized.

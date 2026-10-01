@@ -54,7 +54,15 @@ namespace
     {
         k3::Math::Matrix4 model;
         k3::Math::Matrix4 normal;
+        float             handedness;   // -1 when the model matrix mirrors
     };
+
+    float handedness(const k3::Math::Matrix4& m)
+    {
+        const float* v = m.values;
+        const float det = v[0] * (v[5] * v[10] - v[6] * v[9]) - v[1] * (v[4] * v[10] - v[6] * v[8]) + v[2] * (v[4] * v[9] - v[5] * v[8]);
+        return det < 0.f ? -1.f : 1.f;
+    }
 
     struct VertexJob
     {
@@ -254,8 +262,9 @@ struct k3::SoftwareRasterizer::Impl
             const Mesh& mesh = *command.mesh;
             const Material& material = command.material ? *command.material : defaultMaterial();
 
-            drawStates.push_back({&material, material.alphaMode == AlphaMode::Mask, mesh.hasNormals(), mesh.hasColors()});
-            transforms.push_back({command.transform, command.transform.normalMatrix()});
+            const bool normalMapped = material.normalMap && mesh.hasNormals() && mesh.hasUVs() && mesh.hasTangents();
+            drawStates.push_back({&material, material.alphaMode == AlphaMode::Mask, mesh.hasNormals(), mesh.hasColors(), normalMapped});
+            transforms.push_back({command.transform, command.transform.normalMatrix(), handedness(command.transform)});
         }
     }
 
@@ -362,6 +371,18 @@ struct k3::SoftwareRasterizer::Impl
             v.varyings[sw::ColorG] = c.g;
             v.varyings[sw::ColorB] = c.b;
             v.varyings[sw::ColorA] = c.a;
+
+            if (state.normalMapped) {
+                const auto& t = mesh.tangents[i];
+                const auto tangent = m.model.transformDirection({t.x, t.y, t.z});
+                v.varyings[sw::TangentX] = tangent.x;
+                v.varyings[sw::TangentY] = tangent.y;
+                v.varyings[sw::TangentZ] = tangent.z;
+                // A mirroring transform flips the frame's handedness.
+                v.varyings[sw::TangentW] = t.w * m.handedness;
+            } else {
+                v.varyings[sw::TangentX] = v.varyings[sw::TangentY] = v.varyings[sw::TangentZ] = v.varyings[sw::TangentW] = 0.f;
+            }
         }
     }
 
@@ -639,12 +660,26 @@ struct k3::SoftwareRasterizer::Impl
         l1 *= inv;
         l2 *= inv;
 
-        const bool hasColors = drawStates[t.draw].hasColors;
-        const int count = hasColors ? sw::VARYING_COUNT : sw::ColorR;
+        const sw::DrawState& state = drawStates[t.draw];
         float v[sw::VARYING_COUNT];
 
-        for (int k = 0; k < count; ++k)
-            v[k] = l0 * t.varyings[0][k] + l1 * t.varyings[1][k] + l2 * t.varyings[2][k];
+        auto interpolate = [&](int first, int last) {
+            for (int k = first; k < last; ++k)
+                v[k] = l0 * t.varyings[0][k] + l1 * t.varyings[1][k] + l2 * t.varyings[2][k];
+        };
+        interpolate(0, sw::ColorR);
+
+        Math::Color vertexColor = Math::Color::White;
+        if (state.hasColors) {
+            interpolate(sw::ColorR, sw::TangentX);
+            vertexColor = {v[sw::ColorR], v[sw::ColorG], v[sw::ColorB], v[sw::ColorA]};
+        }
+
+        Math::Vector4f tangent{};
+        if (state.normalMapped) {
+            interpolate(sw::TangentX, sw::VARYING_COUNT);
+            tangent = {v[sw::TangentX], v[sw::TangentY], v[sw::TangentZ], v[sw::TangentW]};
+        }
 
         const float u = v[sw::TexU], tv = v[sw::TexV];
 
@@ -654,7 +689,8 @@ struct k3::SoftwareRasterizer::Impl
             {u, tv},
             {(t.uStep[0] - u * t.qStep[0]) * inv, (t.vStep[0] - tv * t.qStep[0]) * inv},
             {(t.uStep[1] - u * t.qStep[1]) * inv, (t.vStep[1] - tv * t.qStep[1]) * inv},
-            hasColors ? Math::Color{v[sw::ColorR], v[sw::ColorG], v[sw::ColorB], v[sw::ColorA]} : Math::Color::White,
+            vertexColor,
+            tangent,
             t.frontFacing,
         };
     }
