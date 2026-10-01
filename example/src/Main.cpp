@@ -9,6 +9,7 @@
 #include <memory>
 #include "cube/Cube.hpp"
 #include "cube/CubeTextured.hpp"
+#include "scenes/Transparency.hpp"
 
 #ifndef K3_EXAMPLE_ASSETS_DIR
     #define K3_EXAMPLE_ASSETS_DIR "example/assets"
@@ -72,7 +73,7 @@ int main(void)
 
     const std::filesystem::path assets = K3_EXAMPLE_ASSETS_DIR;
 
-    // 1: textured cube, 2: vertex-colored cube, 3: Spot (OBJ + MTL + texture)
+    // 1: textured cube, 2: vertex-colored cube, 3: Spot (OBJ + MTL + texture), 4: transparency
     const k3::Model texturedCube = makeTexturedCube(assets / "stone.png");
     const k3::Model coloredCube{"colored cube", {{std::make_shared<k3::Mesh>(cube), std::make_shared<k3::Material>()}}};
     auto spot = k3::ObjLoader::load(assets / "spot" / "spot.obj");
@@ -82,7 +83,8 @@ int main(void)
         return 1;
     }
 
-    const k3::Model* scenes[] = {&texturedCube, &coloredCube, &*spot};
+    const k3::Model transparency = makeTransparencyScene();
+    const k3::Model* scenes[] = {&texturedCube, &coloredCube, &*spot, &transparency};
     std::size_t currentScene = 2;
 
     auto created = k3::createRasterizer(k3::Backend::Software, {.width = WIDTH, .height = HEIGHT});
@@ -126,7 +128,7 @@ int main(void)
         while (window.pollEvent(event)) {
             if (event.type == sf::Event::Closed)
                 window.close();
-            if (event.type == sf::Event::KeyPressed && event.key.code >= sf::Keyboard::Num1 && event.key.code <= sf::Keyboard::Num3)
+            if (event.type == sf::Event::KeyPressed && event.key.code >= sf::Keyboard::Num1 && event.key.code <= sf::Keyboard::Num4)
                 currentScene = static_cast<std::size_t>(event.key.code - sf::Keyboard::Num1);
         }
 
@@ -172,7 +174,7 @@ int main(void)
             const double avgFrameMs = frameTimeAccumulatedMs / frameCount;
 
             window.setTitle(std::format(
-                "kronk3d [{}] — {} — FPS: {:.1f} | render: {:.2f} ms | {} triangles [1-3: scene]",
+                "kronk3d [{}] — {} — FPS: {:.1f} | render: {:.2f} ms | {} triangles [1-4: scene]",
                 rasterizer->name(), model.name, fps, avgFrameMs, rasterizer->stats().triangles
             ));
 
