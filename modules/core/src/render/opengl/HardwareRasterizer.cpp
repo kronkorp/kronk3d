@@ -170,8 +170,12 @@ namespace
 
 struct k3::HardwareRasterizer::Impl
 {
-    Impl(Program meshProgram, Program shadowProgram)
-        : mesh(std::move(meshProgram)), shadow(std::move(shadowProgram)), meshUniforms(mesh), shadowUniforms(shadow) {}
+    Impl(Program meshProgram, Program shadowProgram, Program ssaaProgram, Program fxaaProgram)
+        : mesh(std::move(meshProgram)), shadow(std::move(shadowProgram)), ssaa(std::move(ssaaProgram)), fxaa(std::move(fxaaProgram)),
+          meshUniforms(mesh), shadowUniforms(shadow)
+    {
+        GenVertexArrays(1, &fullscreenVao);
+    }
 
     ~Impl()
     {
@@ -184,16 +188,23 @@ struct k3::HardwareRasterizer::Impl
             DeleteTextures(1, &shadowTexture);
         if (shadowFbo)
             DeleteFramebuffers(1, &shadowFbo);
+        DeleteVertexArrays(1, &fullscreenVao);
     }
 
     Program        mesh;
     Program        shadow;
+    Program        ssaa;
+    Program        fxaa;
     MeshUniforms   meshUniforms;
     ShadowUniforms shadowUniforms;
     std::string    driver;
+    GLuint         fullscreenVao = 0;
 
-    std::uint32_t width = 0, height = 0;
+    AntiAliasing  antiAliasing = AntiAliasing::None;
+    std::uint32_t width = 0, height = 0;                // Output size
+    std::uint32_t renderWidth = 0, renderHeight = 0;    // Twice the output with SSAA
     GLuint fbo = 0, colorTexture = 0, depthTexture = 0;
+    GLuint postFbo = 0, postTexture = 0;                // Anti-aliased frame
     GLuint shadowFbo = 0, shadowTexture = 0;
     std::uint32_t shadowSize = 0;
     std::optional<std::uint32_t> presentFramebuffer = 0u;
@@ -218,18 +229,27 @@ struct k3::HardwareRasterizer::Impl
             DeleteTextures(1, &colorTexture);
         if (depthTexture)
             DeleteTextures(1, &depthTexture);
-        fbo = colorTexture = depthTexture = 0;
+        if (postFbo)
+            DeleteFramebuffers(1, &postFbo);
+        if (postTexture)
+            DeleteTextures(1, &postTexture);
+        fbo = colorTexture = depthTexture = postFbo = postTexture = 0;
     }
 
-    static GLuint makeTexture(GLint internalFormat, std::uint32_t w, std::uint32_t h, GLenum format, GLenum type)
+    [[nodiscard]] GLuint finalFbo() const noexcept
+    {
+        return antiAliasing == AntiAliasing::None ? fbo : postFbo;
+    }
+
+    static GLuint makeTexture(GLint internalFormat, std::uint32_t w, std::uint32_t h, GLenum format, GLenum type, GLint filter = NEAREST)
     {
         GLuint id = 0;
 
         GenTextures(1, &id);
         BindTexture(TEXTURE_2D, id);
         TexImage2D(TEXTURE_2D, 0, internalFormat, static_cast<GLsizei>(w), static_cast<GLsizei>(h), 0, format, type, nullptr);
-        TexParameteri(TEXTURE_2D, TEXTURE_MIN_FILTER, NEAREST);
-        TexParameteri(TEXTURE_2D, TEXTURE_MAG_FILTER, NEAREST);
+        TexParameteri(TEXTURE_2D, TEXTURE_MIN_FILTER, filter);
+        TexParameteri(TEXTURE_2D, TEXTURE_MAG_FILTER, filter);
         TexParameteri(TEXTURE_2D, TEXTURE_MAX_LEVEL, 0);
         TexParameteri(TEXTURE_2D, TEXTURE_WRAP_S, CLAMP_TO_EDGE);
         TexParameteri(TEXTURE_2D, TEXTURE_WRAP_T, CLAMP_TO_EDGE);
@@ -238,21 +258,58 @@ struct k3::HardwareRasterizer::Impl
 
     void resize(std::uint32_t w, std::uint32_t h)
     {
+        const std::uint32_t scale = antiAliasing == AntiAliasing::SSAA ? 2 : 1;
+
         releaseTarget();
         width = w;
         height = h;
+        renderWidth = w * scale;
+        renderHeight = h * scale;
         if (w == 0 || h == 0)
             return;
 
-        colorTexture = makeTexture(static_cast<GLint>(SRGB8_ALPHA8), w, h, RGBA, UNSIGNED_BYTE);
-        depthTexture = makeTexture(static_cast<GLint>(DEPTH_COMPONENT24), w, h, DEPTH_COMPONENT, FLOAT);
+        // Linear filtering: FXAA reads the frame between texels.
+        colorTexture = makeTexture(static_cast<GLint>(SRGB8_ALPHA8), renderWidth, renderHeight, RGBA, UNSIGNED_BYTE, LINEAR);
+        depthTexture = makeTexture(static_cast<GLint>(DEPTH_COMPONENT24), renderWidth, renderHeight, DEPTH_COMPONENT, FLOAT);
         GenFramebuffers(1, &fbo);
         BindFramebuffer(FRAMEBUFFER, fbo);
         FramebufferTexture2D(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, colorTexture, 0);
         FramebufferTexture2D(FRAMEBUFFER, DEPTH_ATTACHMENT, TEXTURE_2D, depthTexture, 0);
         if (CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE)
-            log(LogLevel::Error, "OpenGL: incomplete render target {}x{}", w, h);
+            log(LogLevel::Error, "OpenGL: incomplete render target {}x{}", renderWidth, renderHeight);
+
+        if (antiAliasing != AntiAliasing::None) {
+            postTexture = makeTexture(static_cast<GLint>(SRGB8_ALPHA8), w, h, RGBA, UNSIGNED_BYTE);
+            GenFramebuffers(1, &postFbo);
+            BindFramebuffer(FRAMEBUFFER, postFbo);
+            FramebufferTexture2D(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, postTexture, 0);
+            if (CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE)
+                log(LogLevel::Error, "OpenGL: incomplete anti-aliasing target {}x{}", w, h);
+        }
         BindFramebuffer(FRAMEBUFFER, 0);
+    }
+
+    // SSAA resolve or FXAA, from the rendered frame into the output frame.
+    void antiAlias()
+    {
+        if (antiAliasing == AntiAliasing::None)
+            return;
+
+        BindFramebuffer(FRAMEBUFFER, postFbo);
+        Viewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+        Enable(FRAMEBUFFER_SRGB);
+        Disable(DEPTH_TEST);
+        Disable(CULL_FACE);
+        Disable(BLEND);
+
+        const Program& program = antiAliasing == AntiAliasing::SSAA ? ssaa : fxaa;
+        UseProgram(program.id());
+        Uniform1i(program.uniform("uSource"), 0);
+        ActiveTexture(TEXTURE0);
+        BindTexture(TEXTURE_2D, colorTexture);
+        BindVertexArray(fullscreenVao);
+        DrawArrays(TRIANGLES, 0, 3);
+        Disable(FRAMEBUFFER_SRGB);
     }
 
     void ensureShadowTarget(std::uint32_t size)
@@ -596,7 +653,7 @@ struct k3::HardwareRasterizer::Impl
     void renderMain(std::size_t firstBlended)
     {
         BindFramebuffer(FRAMEBUFFER, fbo);
-        Viewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+        Viewport(0, 0, static_cast<GLsizei>(renderWidth), static_cast<GLsizei>(renderHeight));
         // Shading happens in linear space; the sRGB target encodes on write and blends in linear,
         // exactly like the software backend.
         Enable(FRAMEBUFFER_SRGB);
@@ -644,7 +701,7 @@ struct k3::HardwareRasterizer::Impl
     {
         if (!presentFramebuffer || !fbo)
             return;
-        BindFramebuffer(READ_FRAMEBUFFER, fbo);
+        BindFramebuffer(READ_FRAMEBUFFER, finalFbo());
         BindFramebuffer(DRAW_FRAMEBUFFER, *presentFramebuffer);
         const auto w = static_cast<GLint>(width), h = static_cast<GLint>(height);
         BlitFramebuffer(0, 0, w, h, 0, 0, w, h, COLOR_BUFFER_BIT, NEAREST);
@@ -686,8 +743,14 @@ k3::Result<std::unique_ptr<k3::HardwareRasterizer>> k3::HardwareRasterizer::crea
     auto shadow = gl::Program::create(gl::shaders::SHADOW_VERTEX, gl::shaders::SHADOW_FRAGMENT);
     if (!shadow)
         return Error{"OpenGL: shadow shader: " + shadow.error()};
+    auto ssaa = gl::Program::create(gl::shaders::FULLSCREEN_VERTEX, gl::shaders::SSAA_FRAGMENT);
+    if (!ssaa)
+        return Error{"OpenGL: SSAA shader: " + ssaa.error()};
+    auto fxaa = gl::Program::create(gl::shaders::FULLSCREEN_VERTEX, gl::shaders::FXAA_FRAGMENT);
+    if (!fxaa)
+        return Error{"OpenGL: FXAA shader: " + fxaa.error()};
 
-    auto impl = std::make_unique<Impl>(std::move(*mesh), std::move(*shadow));
+    auto impl = std::make_unique<Impl>(std::move(*mesh), std::move(*shadow), std::move(*ssaa), std::move(*fxaa));
     impl->driver = std::string(version) + " / " + (renderer ? renderer : "unknown");
     impl->resize(width, height);
     log(LogLevel::Info, "OpenGL rasterizer on {}", impl->driver);
@@ -714,6 +777,19 @@ std::uint32_t k3::HardwareRasterizer::width() const noexcept
 std::uint32_t k3::HardwareRasterizer::height() const noexcept
 {
     return m_impl->height;
+}
+
+void k3::HardwareRasterizer::setAntiAliasing(AntiAliasing mode)
+{
+    if (mode == m_impl->antiAliasing)
+        return;
+    m_impl->antiAliasing = mode;
+    m_impl->resize(m_impl->width, m_impl->height);
+}
+
+k3::AntiAliasing k3::HardwareRasterizer::antiAliasing() const noexcept
+{
+    return m_impl->antiAliasing;
 }
 
 void k3::HardwareRasterizer::beginFrame(const Camera& camera, const Environment& environment)
@@ -768,6 +844,7 @@ void k3::HardwareRasterizer::endFrame()
     gl::UseProgram(impl.mesh.id());
     impl.setFrameUniforms(lights, shadowLight, projection);
     impl.renderMain(blendedStart);
+    impl.antiAlias();
     impl.present();
     impl.restoreState();
 
@@ -788,7 +865,7 @@ k3::Image k3::HardwareRasterizer::readPixels()
     image.height = impl.height;
     image.pixels.resize(static_cast<std::size_t>(impl.width) * impl.height * 4);
 
-    gl::BindFramebuffer(gl::READ_FRAMEBUFFER, impl.fbo);
+    gl::BindFramebuffer(gl::READ_FRAMEBUFFER, impl.finalFbo());
     gl::ReadBuffer(gl::COLOR_ATTACHMENT0);
     gl::PixelStorei(gl::PACK_ALIGNMENT, 1);
     gl::ReadPixels(0, 0, static_cast<gl::GLsizei>(impl.width), static_cast<gl::GLsizei>(impl.height), gl::RGBA, gl::UNSIGNED_BYTE, image.pixels.data());

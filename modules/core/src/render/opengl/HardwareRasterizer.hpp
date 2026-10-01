@@ -41,6 +41,9 @@ namespace k3
             [[nodiscard]] std::uint32_t width() const noexcept override;
             [[nodiscard]] std::uint32_t height() const noexcept override;
 
+            void setAntiAliasing(AntiAliasing mode) override;
+            [[nodiscard]] AntiAliasing antiAliasing() const noexcept override;
+
             void beginFrame(const Camera& camera, const Environment& environment) override;
             using IRasterizer::draw;
             void draw(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material> material, const Math::Matrix4& transform) override;
