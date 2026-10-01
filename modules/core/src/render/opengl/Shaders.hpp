@@ -270,6 +270,82 @@ void main()
 }
 )glsl";
 
+    // Full-screen triangle with no vertex buffer, for the anti-aliasing passes.
+    inline constexpr const char* FULLSCREEN_VERTEX = R"glsl(
+#version 330 core
+void main()
+{
+    vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    gl_Position = vec4(position * 2.0 - 1.0, 0.0, 1.0);
+}
+)glsl";
+
+    // SSAA resolve: average of the 2x2 block (sRGB texels are decoded, so the average is in linear space).
+    inline constexpr const char* SSAA_FRAGMENT = R"glsl(
+#version 330 core
+uniform sampler2D uSource;
+out vec4 fragColor;
+
+void main()
+{
+    ivec2 p = ivec2(gl_FragCoord.xy) * 2;
+    fragColor = 0.25 * (texelFetch(uSource, p, 0) + texelFetch(uSource, p + ivec2(1, 0), 0)
+                      + texelFetch(uSource, p + ivec2(0, 1), 0) + texelFetch(uSource, p + ivec2(1, 1), 0));
+}
+)glsl";
+
+    // FXAA, mirroring render/software/PostProcess.cpp. That code works with y pointing down, OpenGL rows
+    // go up: "up" neighbours and the y of the direction are flipped so both read the same texels.
+    inline constexpr const char* FXAA_FRAGMENT = R"glsl(
+#version 330 core
+uniform sampler2D uSource;
+out vec4 fragColor;
+
+const float SPAN_MAX = 8.0;
+const float REDUCE_MUL = 1.0 / 8.0;
+const float REDUCE_MIN = 1.0 / 128.0;
+
+float luma(vec4 c)
+{
+    return sqrt(dot(c.rgb, vec3(0.299, 0.587, 0.114)));
+}
+
+vec4 at(ivec2 p)
+{
+    return texelFetch(uSource, clamp(p, ivec2(0), textureSize(uSource, 0) - 1), 0);
+}
+
+// Bilinear lookup at an offset (in pixels, y down) from this pixel's center.
+vec4 around(vec2 offset)
+{
+    return texture(uSource, (gl_FragCoord.xy + vec2(offset.x, -offset.y)) / vec2(textureSize(uSource, 0)));
+}
+
+void main()
+{
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    float nw = luma(at(p + ivec2(-1, 1)));
+    float ne = luma(at(p + ivec2(1, 1)));
+    float sw = luma(at(p + ivec2(-1, -1)));
+    float se = luma(at(p + ivec2(1, -1)));
+    vec4 center = at(p);
+    float m = luma(center);
+    float lumaMin = min(m, min(min(nw, ne), min(sw, se)));
+    float lumaMax = max(m, max(max(nw, ne), max(sw, se)));
+
+    vec2 dir = vec2(-((nw + ne) - (sw + se)), (nw + sw) - (ne + se));
+    float reduce = max((nw + ne + sw + se) * (0.25 * REDUCE_MUL), REDUCE_MIN);
+    float scale = 1.0 / (min(abs(dir.x), abs(dir.y)) + reduce);
+    dir = clamp(dir * scale, vec2(-SPAN_MAX), vec2(SPAN_MAX));
+
+    vec4 a = 0.5 * (around(dir * (1.0 / 3.0 - 0.5)) + around(dir * (2.0 / 3.0 - 0.5)));
+    vec4 b = 0.5 * a + 0.25 * (around(dir * -0.5) + around(dir * 0.5));
+    float lumaB = luma(b);
+
+    fragColor = vec4((lumaB < lumaMin || lumaB > lumaMax) ? a.rgb : b.rgb, center.a);
+}
+)glsl";
+
     // Full-screen triangle showing a CPU image (ImagePresenter).
     inline constexpr const char* PRESENT_VERTEX = R"glsl(
 #version 330 core
