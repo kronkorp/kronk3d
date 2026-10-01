@@ -1,28 +1,29 @@
-cmake_minimum_required(VERSION 3.16)
+cmake_minimum_required(VERSION 3.20)
 project(kronk3d LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+include(cmake/ProjectOptions.cmake)
+include(cmake/CompilerOptions.cmake)
+include(cmake/Utils.cmake)
+include(cmake/Dependencies.cmake)
 
-if(NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
+option(K3_BUILD_EXAMPLES "Build the kronk3d example (needs SFML, fetched if not installed)" ${PROJECT_IS_TOP_LEVEL})
+option(K3_BUILD_TESTS "Build the kronk3d unit tests" ${PROJECT_IS_TOP_LEVEL})
+option(K3_BUILD_GL_TESTS "Build the OpenGL backend tests (need SFML for the context)" ${K3_BUILD_TESTS})
+
+if (K3_BUILD_EXAMPLES OR K3_BUILD_GL_TESTS)
+    k3_find_sfml()
 endif()
 
-file(GLOB_RECURSE KRONK3D_SOURCES CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp")
-file(GLOB_RECURSE KRONK3D_HEADERS CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/include/*.hpp")
+add_subdirectory(modules/math)
+add_subdirectory(modules/api)
+add_subdirectory(modules/logger)
+add_subdirectory(modules/core)
 
-add_library(kronk3d_shared SHARED ${KRONK3D_SOURCES} ${KRONK3D_HEADERS})
-add_library(kronk3d_static STATIC ${KRONK3D_SOURCES} ${KRONK3D_HEADERS})
+if (K3_BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(modules/test)
+endif()
 
-foreach(target kronk3d_shared kronk3d_static)
-    target_include_directories(${target} PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include")
-    set_target_properties(${target} PROPERTIES OUTPUT_NAME kronk3d)
-endforeach()
-
-set_target_properties(kronk3d_shared PROPERTIES POSITION_INDEPENDENT_CODE ON)
-
-install(TARGETS kronk3d_shared kronk3d_static
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib
-)
-install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/include/" DESTINATION include)
+if (K3_BUILD_EXAMPLES)
+    add_subdirectory(example)
+endif()
