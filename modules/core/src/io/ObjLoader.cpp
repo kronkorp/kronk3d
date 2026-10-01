@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <format>
 #include <fstream>
-#include <iterator>
 #include <sstream>
 #include <string_view>
 #include <unordered_map>
@@ -105,7 +104,10 @@ namespace
 
     std::string readAll(std::istream& stream)
     {
-        return {std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
+        std::ostringstream buffer;
+
+        buffer << stream.rdbuf();
+        return std::move(buffer).str();
     }
 
     std::unique_ptr<std::istream> openFile(const std::filesystem::path& path, const k3::ObjLoadOptions& options)

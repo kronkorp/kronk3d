@@ -1,8 +1,4 @@
-// Compiles the stb implementations exactly once for the whole project.
-// Every other translation unit only sees the declarations.
-#define STB_IMAGE_IMPLEMENTATION
 #include "third_party/stb_image.h"
-#define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "third_party/stb_image_write.h"
 
 #include "Image.hpp"
