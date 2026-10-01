@@ -23,4 +23,6 @@
 
 #include "render/Environment.hpp"
 #include "render/IRasterizer.hpp"
+#include "render/opengl/HardwareRasterizer.hpp"
+#include "render/opengl/ImagePresenter.hpp"
 #include "render/software/SoftwareRasterizer.hpp"
