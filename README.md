@@ -15,9 +15,10 @@ Both backends produce the same image: the shading code is mirrored, and tests co
 - **Assets**
   - Wavefront **OBJ + MTL** loading: polygons with any number of sides, negative indices, vertex colors.
   - Normals are generated when the file has none (smooth, or flat with `s off`).
-  - Material properties `Kd Ks Ke Ns d Tr illum` and textures `map_Kd map_Ks map_d`.
+  - Material properties `Kd Ks Ke Ns d Tr illum` and textures `map_Kd map_Ks map_d norm map_Bump` (bump height maps are converted to normal maps).
 - **Lighting**
   - Per-pixel Blinn-Phong, computed in linear space with sRGB output.
+  - Normal mapping (tangent space, OpenGL convention), with tangents computed from the uvs.
   - Ambient, directional, point and spot lights (up to 8).
   - Shadow maps for a directional light, with PCF soft edges and the alpha test applied to casters.
 - **Textures**
@@ -150,6 +151,7 @@ frame times. `tools/bench/download_sponza.sh` fetches Crytek Sponza (262k triang
 - **Coordinates**: right-handed, y up; the camera looks toward -Z. Front faces are counter-clockwise (as in OpenGL and OBJ).
 - **Matrices**: row-major (`Matrix4::values`), column vectors (`M * v`); the depth range is OpenGL's.
 - **UVs**: `(0, 0)` is the top-left of the image. The OBJ loader flips `v` (`ObjLoadOptions::flipV`).
+- **Normal maps**: tangent space, OpenGL convention (green points toward the top of the image), linear color space. Meshes need tangents (`Mesh::computeTangents()`; the OBJ loader computes them when needed). `Texture::normalMapFromHeight` converts height maps.
 - **Colors**: every `Math::Color` is linear. Use `Color::fromSRGB` for colors taken from an image editor. Textures declare their color space (sRGB for colors, linear for masks).
 - **Attenuation**: point and spot lights fall off as `(1 - (d / range)^4)^2 / (d^2 + 1)`.
 

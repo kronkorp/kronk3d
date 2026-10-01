@@ -108,7 +108,7 @@ namespace
         return std::make_shared<k3::Texture>(image);
     }
 
-    // Everything at once: textures, every light type, shadows, alpha test, double-sided blending.
+    // Everything at once: textures, normal map, every light type, shadows, alpha test, double-sided blending.
     void drawScene(k3::IRasterizer& rasterizer)
     {
         k3::Camera camera;
@@ -128,8 +128,11 @@ namespace
         floor->diffuseMap = checker(90, 200);
         auto shiny = std::make_shared<k3::Material>();
         shiny->diffuseMap = checker(40, 230);
+        shiny->normalMap = k3::Texture::normalMapFromHeight(checker(0, 255)->image(), 2.f);
         shiny->specular = {0.6f, 0.6f, 0.6f, 1.f};
         shiny->shininess = 48.f;
+        auto bumpySphere = sphere(32, 64);
+        bumpySphere->computeTangents();
         auto glass = std::make_shared<k3::Material>();
         glass->diffuse = {0.3f, 0.6f, 1.f, 0.35f};
         glass->specular = {0.8f, 0.8f, 0.8f, 1.f};
@@ -138,7 +141,7 @@ namespace
 
         rasterizer.beginFrame(camera, environment);
         rasterizer.draw(quad(4.f, -1.f), floor, k3::Math::Matrix4::identity());
-        rasterizer.draw(sphere(32, 64), shiny, k3::Math::Matrix4::translate({-0.6f, -0.2f, 0.f}) * k3::Math::Matrix4::scale(0.8f));
+        rasterizer.draw(bumpySphere, shiny, k3::Math::Matrix4::translate({-0.6f, -0.2f, 0.f}) * k3::Math::Matrix4::scale(0.8f));
         rasterizer.draw(sphere(16, 32), glass, k3::Math::Matrix4::translate({0.9f, 0.f, 0.6f}) * k3::Math::Matrix4::scale(0.6f));
         rasterizer.endFrame();
     }
