@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(kronk3d LANGUAGES CXX)
+project(kronk3d VERSION 0.1.0 LANGUAGES CXX)
 
 include(cmake/ProjectOptions.cmake)
 include(cmake/CompilerOptions.cmake)
@@ -27,3 +27,5 @@ endif()
 if (K3_BUILD_EXAMPLES)
     add_subdirectory(example)
 endif()
+
+include(cmake/Install.cmake)

@@ -13,7 +13,7 @@ find_package(Threads REQUIRED)
 add_library(kronk3d_objects OBJECT ${SOURCES})
 apply_project_settings(kronk3d_objects)
 set_target_properties(kronk3d_objects PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_include_directories(kronk3d_objects PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/)
+target_include_directories(kronk3d_objects PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/>)
 target_link_libraries(kronk3d_objects PUBLIC math Threads::Threads PRIVATE logger)
 
 add_library(kronk3d_shared SHARED $<TARGET_OBJECTS:kronk3d_objects>)
@@ -21,10 +21,19 @@ add_library(kronk3d_static STATIC $<TARGET_OBJECTS:kronk3d_objects>)
 
 foreach(target kronk3d_shared kronk3d_static)
     apply_project_settings(${target})
-    target_include_directories(${target} PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/)
+    target_include_directories(${target} PUBLIC
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/kronk3d>
+    )
     target_link_libraries(${target} PUBLIC math Threads::Threads PRIVATE logger)
     set_target_properties(${target} PROPERTIES OUTPUT_NAME kronk3d)
 endforeach()
+
+# Exported (and aliased in-tree) as kronk3d::shared / kronk3d::static.
+set_target_properties(kronk3d_shared PROPERTIES EXPORT_NAME shared)
+set_target_properties(kronk3d_static PROPERTIES EXPORT_NAME static)
+add_library(kronk3d::shared ALIAS kronk3d_shared)
+add_library(kronk3d::static ALIAS kronk3d_static)
 
 # No __declspec(dllexport) annotations in the sources: let CMake export everything.
 set_target_properties(kronk3d_shared PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
@@ -33,16 +42,3 @@ set_target_properties(kronk3d_shared PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
 if (MSVC)
     set_target_properties(kronk3d_static PROPERTIES OUTPUT_NAME kronk3d_static)
 endif()
-
-###
-
-install(TARGETS kronk3d_shared kronk3d_static
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-)
-# Keep the folder layout: headers include each other as "scene/Mesh.hpp", "io/ObjLoader.hpp"...
-install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/ ${CMAKE_CURRENT_SOURCE_DIR}/../math/src/
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/kronk3d
-    FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h"
-)
