@@ -1,7 +1,10 @@
 #include "Texture.hpp"
+#include "Vector.hpp"
 #include "utils/Log.hpp"
 #include "utils/Srgb.hpp"
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <utility>
 
 namespace
@@ -77,4 +80,29 @@ void k3::Texture::setImage(Image image)
     while (!m_levels.back().empty() && (m_levels.back().width > 1 || m_levels.back().height > 1))
         m_levels.push_back(downsample(m_levels.back(), m_colorSpace));
     ++m_version;
+}
+
+std::shared_ptr<k3::Texture> k3::Texture::normalMapFromHeight(const Image& height, float strength)
+{
+    Image normals(height.width, height.height);
+    const auto w = static_cast<std::int64_t>(height.width), h = static_cast<std::int64_t>(height.height);
+    auto at = [&](std::int64_t x, std::int64_t y) {
+        return height.texel(static_cast<std::uint32_t>((x + w) % w), static_cast<std::uint32_t>((y + h) % h))[0] / 255.f;
+    };
+
+    for (std::int64_t y = 0; y < h; ++y) {
+        for (std::int64_t x = 0; x < w; ++x) {
+            // Central differences; image y grows downward, normal map +y points up.
+            const float dx = (at(x + 1, y) - at(x - 1, y)) * 0.5f * strength;
+            const float dy = (at(x, y + 1) - at(x, y - 1)) * 0.5f * strength;
+            const auto n = Math::Vector3f::normalize({-dx, dy, 1.f});
+            std::uint8_t* texel = normals.texel(static_cast<std::uint32_t>(x), static_cast<std::uint32_t>(y));
+
+            texel[0] = static_cast<std::uint8_t>(std::lround((n.x * 0.5f + 0.5f) * 255.f));
+            texel[1] = static_cast<std::uint8_t>(std::lround((n.y * 0.5f + 0.5f) * 255.f));
+            texel[2] = static_cast<std::uint8_t>(std::lround((n.z * 0.5f + 0.5f) * 255.f));
+            texel[3] = 255;
+        }
+    }
+    return std::make_shared<Texture>(std::move(normals), ColorSpace::Linear);
 }

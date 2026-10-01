@@ -32,8 +32,10 @@ namespace k3
     // Supported:
     //   OBJ: v (+ optional vertex colors "v x y z r g b"), vt, vn, f (any polygon, fan-triangulated,
     //        negative indices, v | v/vt | v//vn | v/vt/vn), usemtl, mtllib, s (flat normals when off)
-    //   MTL: newmtl, Kd, Ks, Ke, Ns, d, Tr, illum, map_Kd, map_Ks, map_d (with -clamp and ignored options)
-    // One primitive is produced per material. Missing normals are generated.
+    //   MTL: newmtl, Kd, Ks, Ke, Ns, d, Tr, illum, map_Kd, map_Ks, map_d, norm, map_Bump / bump (grey-scale
+    //        height maps are converted to normal maps; -bm and -clamp honored, other options skipped)
+    // One primitive is produced per material. Missing normals are generated, and tangents too when the
+    // material has a normal map.
     class ObjLoader
     {
         public:

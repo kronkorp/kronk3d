@@ -44,6 +44,9 @@ namespace k3
         // True if at least one texel is not fully opaque.
         [[nodiscard]] bool hasTransparency() const noexcept;
 
+        // True if every texel has r = g = b (give or take `tolerance`).
+        [[nodiscard]] bool isGrayscale(int tolerance = 2) const noexcept;
+
         // PNG, JPEG, BMP, TGA, PSD, GIF, HDR, PIC, PNM (anything stb_image reads). Always converted to RGBA8.
         static k3::Result<Image> load(const std::filesystem::path& path);
         static k3::Result<Image> loadFromMemory(const void* data, std::size_t size);

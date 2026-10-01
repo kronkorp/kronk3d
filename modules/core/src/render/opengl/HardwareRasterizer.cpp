@@ -22,6 +22,7 @@ namespace
         SPECULAR_UNIT = 1,
         OPACITY_UNIT  = 2,
         SHADOW_UNIT   = 3,
+        NORMAL_UNIT   = 4,
     };
 
     struct GpuMesh
@@ -30,7 +31,7 @@ namespace
         GLuint             vao = 0, vbo = 0, ebo = 0;
         GLsizei            count = 0;               // Indices (or vertices when not indexed)
         bool               indexed = false;
-        bool               hasNormals = false, hasUVs = false, hasColors = false;
+        bool               hasNormals = false, hasUVs = false, hasColors = false, hasTangents = false;
         k3::Math::Bounds3f bounds{};
     };
 
@@ -104,6 +105,14 @@ namespace
         return a.filter == b.filter && a.mipmaps == b.mipmaps && a.wrapU == b.wrapU && a.wrapV == b.wrapV;
     }
 
+    // -1 when the matrix mirrors (negative determinant of its 3x3 part).
+    float handedness(const k3::Math::Matrix4& m)
+    {
+        const float* v = m.values;
+        const float det = v[0] * (v[5] * v[10] - v[6] * v[9]) - v[1] * (v[4] * v[10] - v[6] * v[8]) + v[2] * (v[4] * v[9] - v[5] * v[8]);
+        return det < 0.f ? -1.f : 1.f;
+    }
+
     void setMatrix(GLint location, const k3::Math::Matrix4& m)
     {
         // kronk3d matrices are row-major.
@@ -118,6 +127,7 @@ namespace
         GLint shadowLight, shadowMap, shadowViewProjection, shadowSize, shadowDepthBias, shadowNormalOffset, shadowPcfRadius;
         GLint diffuse, specular, emissive, shininess, unlit, alphaMode, alphaCutoff;
         GLint hasNormals, hasDiffuseMap, hasSpecularMap, hasOpacityMap, diffuseMap, specularMap, opacityMap;
+        GLint handedness, hasNormalMap, normalScale, normalMap;
 
         explicit MeshUniforms(const Program& p)
             : viewProjection(p.uniform("uViewProjection")), model(p.uniform("uModel")), normalMatrix(p.uniform("uNormalMatrix")),
@@ -136,7 +146,9 @@ namespace
               alphaCutoff(p.uniform("uAlphaCutoff")), hasNormals(p.uniform("uHasNormals")),
               hasDiffuseMap(p.uniform("uHasDiffuseMap")), hasSpecularMap(p.uniform("uHasSpecularMap")),
               hasOpacityMap(p.uniform("uHasOpacityMap")), diffuseMap(p.uniform("uDiffuseMap")),
-              specularMap(p.uniform("uSpecularMap")), opacityMap(p.uniform("uOpacityMap"))
+              specularMap(p.uniform("uSpecularMap")), opacityMap(p.uniform("uOpacityMap")),
+              handedness(p.uniform("uHandedness")), hasNormalMap(p.uniform("uHasNormalMap")),
+              normalScale(p.uniform("uNormalScale")), normalMap(p.uniform("uNormalMap"))
         {
         }
     };
@@ -293,6 +305,7 @@ struct k3::HardwareRasterizer::Impl
         gpu.hasNormals = mesh.hasNormals();
         gpu.hasUVs = mesh.hasUVs();
         gpu.hasColors = mesh.hasColors();
+        gpu.hasTangents = mesh.hasTangents();
         gpu.bounds = mesh.bounds();
 
         // One buffer, attributes one after the other: positions, normals, uvs, colors.
@@ -300,12 +313,13 @@ struct k3::HardwareRasterizer::Impl
         const std::size_t normalsSize = gpu.hasNormals ? n * sizeof(Math::Vector3f) : 0;
         const std::size_t uvsSize = gpu.hasUVs ? n * sizeof(Math::Vector2f) : 0;
         const std::size_t colorsSize = gpu.hasColors ? n * sizeof(Math::Color) : 0;
+        const std::size_t tangentsSize = gpu.hasTangents ? n * sizeof(Math::Vector4f) : 0;
 
         GenVertexArrays(1, &gpu.vao);
         BindVertexArray(gpu.vao);
         GenBuffers(1, &gpu.vbo);
         BindBuffer(ARRAY_BUFFER, gpu.vbo);
-        BufferData(ARRAY_BUFFER, static_cast<GLsizeiptr>(positionsSize + normalsSize + uvsSize + colorsSize), nullptr, STATIC_DRAW);
+        BufferData(ARRAY_BUFFER, static_cast<GLsizeiptr>(positionsSize + normalsSize + uvsSize + colorsSize + tangentsSize), nullptr, STATIC_DRAW);
 
         std::size_t offset = 0;
         auto attribute = [&](GLuint location, GLint components, const void* data, std::size_t size) {
@@ -322,6 +336,7 @@ struct k3::HardwareRasterizer::Impl
         attribute(shaders::NORMAL, 3, mesh.normals.data(), normalsSize);
         attribute(shaders::UV, 2, mesh.uvs.data(), uvsSize);
         attribute(shaders::COLOR, 4, mesh.colors.data(), colorsSize);
+        attribute(shaders::TANGENT, 4, mesh.tangents.data(), tangentsSize);
 
         // Out-of-range indices would read outside the buffer: drop those triangles, as the software backend does.
         const std::size_t indexCount = mesh.indexCount() / 3 * 3;
@@ -424,6 +439,8 @@ struct k3::HardwareRasterizer::Impl
             VertexAttrib4f(shaders::UV, 0.f, 0.f, 0.f, 1.f);
         if (!gpu.hasColors)
             VertexAttrib4f(shaders::COLOR, 1.f, 1.f, 1.f, 1.f);
+        if (!gpu.hasTangents)
+            VertexAttrib4f(shaders::TANGENT, 0.f, 0.f, 0.f, 0.f);
         DrawElements(TRIANGLES, gpu.count, UNSIGNED_INT, nullptr);
     }
 
@@ -533,6 +550,7 @@ struct k3::HardwareRasterizer::Impl
         Uniform1i(u.diffuseMap, DIFFUSE_UNIT);
         Uniform1i(u.specularMap, SPECULAR_UNIT);
         Uniform1i(u.opacityMap, OPACITY_UNIT);
+        Uniform1i(u.normalMap, NORMAL_UNIT);
         Uniform1i(u.shadowMap, SHADOW_UNIT);
         Uniform1i(u.shadowLight, shadowLight);
         if (shadowLight >= 0) {
@@ -566,7 +584,13 @@ struct k3::HardwareRasterizer::Impl
         Uniform1i(u.hasDiffuseMap, bindTexture(DIFFUSE_UNIT, material.diffuseMap));
         Uniform1i(u.hasSpecularMap, bindTexture(SPECULAR_UNIT, material.specularMap));
         Uniform1i(u.hasOpacityMap, bindTexture(OPACITY_UNIT, material.opacityMap));
-        drawMesh(*command.gpu);
+
+        const GpuMesh& gpu = *command.gpu;
+        const bool normalMapped = material.normalMap && gpu.hasNormals && gpu.hasUVs && gpu.hasTangents;
+        Uniform1i(u.hasNormalMap, normalMapped && bindTexture(NORMAL_UNIT, material.normalMap));
+        Uniform1f(u.normalScale, material.normalScale);
+        Uniform1f(u.handedness, handedness(command.transform));
+        drawMesh(gpu);
     }
 
     void renderMain(std::size_t firstBlended)

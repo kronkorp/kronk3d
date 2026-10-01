@@ -111,6 +111,19 @@ k3::Math::Color k3::sw::shade(const ShadingContext& context, const Material& mat
     if (!fragment.frontFacing)
         n = -n;
 
+    if (material.normalMap && fragment.tangent.w != 0.f) {
+        // Tangent frame re-orthogonalized after interpolation; the map's x/y/z go along t/b/n.
+        const Vector3f tangent{fragment.tangent.x, fragment.tangent.y, fragment.tangent.z};
+        const Vector3f t = Vector3f::normalize(tangent - n * Vector3f::dot(n, tangent));
+        const Vector3f b = Vector3f::cross(n, t) * (fragment.tangent.w < 0.f ? -1.f : 1.f);
+        const Math::Color texel = sampleTexture(material.normalMap.get(), fragment.uv, fragment.duvdx, fragment.duvdy);
+        const float x = (texel.r * 2.f - 1.f) * material.normalScale;
+        const float y = (texel.g * 2.f - 1.f) * material.normalScale;
+        const float z = texel.b * 2.f - 1.f;
+
+        n = Vector3f::normalize(t * x + b * y + n * z);
+    }
+
     const Vector3f v = context.orthographic ? context.viewDirection : Vector3f::normalize(context.cameraPosition - fragment.position);
     Math::Color specular = material.specular;
     if (material.specularMap)

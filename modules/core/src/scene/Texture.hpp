@@ -61,6 +61,11 @@ namespace k3
             // Returns nullptr (and logs) when the file cannot be read.
             static std::shared_ptr<Texture> load(const std::filesystem::path& path, ColorSpace colorSpace = ColorSpace::Srgb);
 
+            // Tangent-space normal map (OpenGL convention, linear) from a height map: the red channel is
+            // the height in [0, 1], `strength` scales the slopes (a full 0 -> 1 rise over one texel tilts
+            // the normal by atan(strength)). Wraps at the borders, as tiling textures do.
+            static std::shared_ptr<Texture> normalMapFromHeight(const Image& height, float strength = 4.f);
+
             [[nodiscard]] const Image& image() const noexcept { return level(0); }
             [[nodiscard]] std::uint32_t width() const noexcept { return image().width; }
             [[nodiscard]] std::uint32_t height() const noexcept { return image().height; }
