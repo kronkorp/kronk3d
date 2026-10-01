@@ -2,6 +2,7 @@
 #include "Clipper.hpp"
 #include "Pipeline.hpp"
 #include "Shading.hpp"
+#include "ThreadPool.hpp"
 #include "utils/Srgb.hpp"
 #include <algorithm>
 #include <chrono>
@@ -11,8 +12,13 @@
 namespace
 {
 
-    // Tiles are rendered independently, so a tile's buffers stay in cache while all its triangles are drawn.
+    // Tiles are rendered independently (and in parallel): a tile's buffers stay in cache while all its
+    // triangles are drawn, and no two threads ever touch the same pixel.
     constexpr std::int32_t TILE_SIZE = 64;
+
+    // Work granularity of the parallel geometry stages.
+    constexpr std::size_t VERTEX_CHUNK = 4096;
+    constexpr std::size_t TRIANGLE_CHUNK = 2048;
 
     struct DrawCommand
     {
@@ -39,6 +45,35 @@ namespace
     {
         return command.material && command.material->alphaMode == k3::AlphaMode::Blend;
     }
+
+    // Per-draw matrices, computed once per frame.
+    struct DrawTransforms
+    {
+        k3::Math::Matrix4 modelViewProjection;
+        k3::Math::Matrix4 model;
+        k3::Math::Matrix4 normal;
+    };
+
+    struct VertexJob
+    {
+        std::uint32_t draw;
+        std::size_t   first, last;          // Vertex range
+    };
+
+    struct GeometryJob
+    {
+        std::uint32_t draw;
+        Faces         faces;
+        bool          blended;
+        std::size_t   first, last;          // Index range, multiple of 3
+    };
+
+    // Triangles overlapping a tile, in submission order.
+    struct TileBin
+    {
+        std::vector<const k3::sw::Triangle*> opaque;
+        std::vector<const k3::sw::Triangle*> blended;
+    };
 
     // Calls fn(x, y, edges) for every pixel of `t` inside the [x0, x1] x [y0, y1] rectangle.
     template<typename Fn>
@@ -77,13 +112,15 @@ namespace
 
 struct k3::SoftwareRasterizer::Impl
 {
+    explicit Impl(unsigned threads) : pool(threads) {}
+
     std::uint32_t width = 0, height = 0;
     std::uint32_t tilesX = 0, tilesY = 0;
-    unsigned      threads = 0;
+    sw::ThreadPool pool;
 
-    std::vector<Math::Color>   color;
-    std::vector<float>         depth;
-    std::vector<std::uint32_t> visibility;
+    std::vector<Math::Color>          color;
+    std::vector<float>                depth;
+    std::vector<const sw::Triangle*>  visibility;       // Nearest opaque triangle of each pixel
 
     Camera             camera{};
     Environment        environment{};
@@ -91,12 +128,16 @@ struct k3::SoftwareRasterizer::Impl
     Math::Matrix4      viewProjection = Math::Matrix4::identity();
     sw::ShadingContext shading{};
 
-    std::vector<DrawCommand>                commands;
-    std::vector<sw::DrawState>              drawStates;
-    std::vector<sw::Triangle>               triangles;
-    std::uint32_t                           firstBlendTriangle = 0;
-    std::vector<std::vector<std::uint32_t>> bins;
-    std::vector<sw::ClipVertex>             transformed;
+    // Frame data, indexed by draw (position in `commands` once sorted).
+    std::vector<DrawCommand>                 commands;
+    std::vector<sw::DrawState>               drawStates;
+    std::vector<DrawTransforms>              transforms;
+    std::vector<std::vector<sw::ClipVertex>> vertices;
+
+    std::vector<VertexJob>                   vertexJobs;
+    std::vector<GeometryJob>                 geometryJobs;
+    std::vector<std::vector<sw::Triangle>>   jobTriangles;   // Output of each geometry job (stable during the frame)
+    std::vector<TileBin>                     bins;
 
     FrameStats stats{};
 
@@ -108,36 +149,79 @@ struct k3::SoftwareRasterizer::Impl
         tilesY = (h + TILE_SIZE - 1) / TILE_SIZE;
         color.assign(static_cast<std::size_t>(w) * h, Math::Color::Black);
         depth.assign(static_cast<std::size_t>(w) * h, 1.f);
-        visibility.assign(static_cast<std::size_t>(w) * h, sw::NO_TRIANGLE);
+        visibility.assign(static_cast<std::size_t>(w) * h, nullptr);
         bins.assign(static_cast<std::size_t>(tilesX) * tilesY, {});
     }
 
-    /* Geometry: vertex transform, clipping, triangle setup */
+    /* Frame setup (sequential) */
 
-    void geometry(const DrawCommand& command, Faces faces)
+    // Fills the per-draw data and splits the frame into vertex and geometry jobs. Geometry jobs are in
+    // drawing order: opaque draws, then blended ones (`firstBlended` onward), back faces before front
+    // faces for double-sided blended materials.
+    void planJobs(std::size_t firstBlended)
     {
-        const Mesh& mesh = *command.mesh;
-        const Material& material = command.material ? *command.material : defaultMaterial();
-        const auto drawIndex = static_cast<std::uint32_t>(drawStates.size());
-        const sw::DrawState state{&material, material.alphaMode == AlphaMode::Mask, mesh.hasNormals(), mesh.hasColors()};
+        drawStates.clear();
+        transforms.clear();
+        vertexJobs.clear();
+        geometryJobs.clear();
+        if (vertices.size() < commands.size())
+            vertices.resize(commands.size());
 
-        drawStates.push_back(state);
+        for (std::size_t d = 0; d < commands.size(); ++d) {
+            const DrawCommand& command = commands[d];
+            const Mesh& mesh = *command.mesh;
+            const Material& material = command.material ? *command.material : defaultMaterial();
+            const auto draw = static_cast<std::uint32_t>(d);
 
-        const Math::Matrix4 mvp = viewProjection * command.transform;
-        const Math::Matrix4 normalMatrix = command.transform.normalMatrix();
+            drawStates.push_back({&material, material.alphaMode == AlphaMode::Mask, mesh.hasNormals(), mesh.hasColors()});
+            transforms.push_back({viewProjection * command.transform, command.transform, command.transform.normalMatrix()});
+            vertices[d].resize(mesh.vertexCount());
+            for (std::size_t first = 0; first < mesh.vertexCount(); first += VERTEX_CHUNK)
+                vertexJobs.push_back({draw, first, std::min(first + VERTEX_CHUNK, mesh.vertexCount())});
+        }
+
+        auto addGeometry = [&](std::size_t d, Faces faces, bool blended) {
+            const std::size_t indexCount = commands[d].mesh->indexCount() / 3 * 3;
+
+            for (std::size_t first = 0; first < indexCount; first += TRIANGLE_CHUNK * 3)
+                geometryJobs.push_back({static_cast<std::uint32_t>(d), faces, blended, first, std::min(first + TRIANGLE_CHUNK * 3, indexCount)});
+        };
+
+        for (std::size_t d = 0; d < firstBlended; ++d)
+            addGeometry(d, drawStates[d].material->doubleSided ? Faces::All : Faces::Front, false);
+        // A double-sided blended mesh (a glass box) shows its inside through its outside: draw the faces
+        // turned away from the camera first, so they end up behind whatever the triangle order is.
+        for (std::size_t d = firstBlended; d < commands.size(); ++d) {
+            if (drawStates[d].material->doubleSided)
+                addGeometry(d, Faces::Back, true);
+            addGeometry(d, Faces::Front, true);
+        }
+
+        if (jobTriangles.size() < geometryJobs.size())
+            jobTriangles.resize(geometryJobs.size());
+        for (std::size_t j = 0; j < geometryJobs.size(); ++j)
+            jobTriangles[j].clear();
+    }
+
+    /* Geometry (parallel): vertex transform, then clipping and triangle setup */
+
+    void transformVertices(const VertexJob& job)
+    {
+        const Mesh& mesh = *commands[job.draw].mesh;
+        const sw::DrawState& state = drawStates[job.draw];
+        const DrawTransforms& m = transforms[job.draw];
         const bool hasUVs = mesh.hasUVs();
-        const bool hasColors = state.hasColors;
+        auto& out = vertices[job.draw];
 
-        transformed.resize(mesh.vertexCount());
-        for (std::size_t i = 0; i < mesh.vertexCount(); ++i) {
+        for (std::size_t i = job.first; i < job.last; ++i) {
             const auto& p = mesh.positions[i];
-            const auto world = command.transform.transformPoint(p);
-            const auto normal = state.hasNormals ? normalMatrix.transformDirection(mesh.normals[i]) : Math::Vector3f{};
+            const auto world = m.model.transformPoint(p);
+            const auto normal = state.hasNormals ? m.normal.transformDirection(mesh.normals[i]) : Math::Vector3f{};
             const auto uv = hasUVs ? mesh.uvs[i] : Math::Vector2f{};
-            const auto c = hasColors ? mesh.colors[i] : Math::Color::White;
-            auto& v = transformed[i];
+            const auto c = state.hasColors ? mesh.colors[i] : Math::Color::White;
+            auto& v = out[i];
 
-            v.position = mvp * p.asPoint();
+            v.position = m.modelViewProjection * p.asPoint();
             v.varyings[sw::WorldX] = world.x;
             v.varyings[sw::WorldY] = world.y;
             v.varyings[sw::WorldZ] = world.z;
@@ -151,11 +235,17 @@ struct k3::SoftwareRasterizer::Impl
             v.varyings[sw::ColorB] = c.b;
             v.varyings[sw::ColorA] = c.a;
         }
+    }
 
+    void assemble(const GeometryJob& job, std::vector<sw::Triangle>& out) const
+    {
+        const Mesh& mesh = *commands[job.draw].mesh;
+        const auto& transformed = vertices[job.draw];
+        const bool hasNormals = drawStates[job.draw].hasNormals;
         const std::size_t vertexCount = mesh.vertexCount();
         sw::ClipVertex polygon[sw::MAX_CLIPPED_VERTICES];
 
-        for (std::size_t t = 0; t + 2 < mesh.indexCount(); t += 3) {
+        for (std::size_t t = job.first; t < job.last; t += 3) {
             const auto i0 = mesh.index(t), i1 = mesh.index(t + 1), i2 = mesh.index(t + 2);
 
             if (i0 >= vertexCount || i1 >= vertexCount || i2 >= vertexCount)
@@ -163,12 +253,12 @@ struct k3::SoftwareRasterizer::Impl
 
             sw::ClipVertex a = transformed[i0], b = transformed[i1], c = transformed[i2];
 
-            if (!state.hasNormals)
+            if (!hasNormals)
                 setFaceNormal(a, b, c);
 
             const std::size_t count = sw::clipTriangle(a, b, c, polygon);
             for (std::size_t k = 1; k + 1 < count; ++k)
-                setupTriangle(polygon[0], polygon[k], polygon[k + 1], drawIndex, faces);
+                setupTriangle(polygon[0], polygon[k], polygon[k + 1], job.draw, job.faces, out);
         }
     }
 
@@ -186,7 +276,10 @@ struct k3::SoftwareRasterizer::Impl
         }
     }
 
-    void setupTriangle(const sw::ClipVertex& v0, const sw::ClipVertex& v1, const sw::ClipVertex& v2, std::uint32_t drawIndex, Faces faces)
+    void setupTriangle(
+        const sw::ClipVertex& v0, const sw::ClipVertex& v1, const sw::ClipVertex& v2,
+        std::uint32_t draw, Faces faces, std::vector<sw::Triangle>& out
+    ) const
     {
         const sw::ClipVertex* in[3] = {&v0, &v1, &v2};
         std::int64_t x[3], y[3];
@@ -262,26 +355,34 @@ struct k3::SoftwareRasterizer::Impl
         if (t.minX > t.maxX || t.minY > t.maxY)
             return;
 
-        t.draw = drawIndex;
+        t.draw = draw;
         t.frontFacing = frontFacing;
-        triangles.push_back(t);
+        out.push_back(t);
     }
 
+    // Sequential, walking the jobs in drawing order: bins keep the submission order blending relies on.
     void bin()
     {
-        for (auto& tile : bins)
-            tile.clear();
+        for (auto& tile : bins) {
+            tile.opaque.clear();
+            tile.blended.clear();
+        }
 
-        for (std::uint32_t id = 0; id < triangles.size(); ++id) {
-            const auto& t = triangles[id];
+        for (std::size_t j = 0; j < geometryJobs.size(); ++j) {
+            const bool blended = geometryJobs[j].blended;
 
-            for (std::int32_t ty = t.minY / TILE_SIZE; ty <= t.maxY / TILE_SIZE; ++ty)
-                for (std::int32_t tx = t.minX / TILE_SIZE; tx <= t.maxX / TILE_SIZE; ++tx)
-                    bins[static_cast<std::size_t>(ty) * tilesX + tx].push_back(id);
+            for (const sw::Triangle& t : jobTriangles[j]) {
+                for (std::int32_t ty = t.minY / TILE_SIZE; ty <= t.maxY / TILE_SIZE; ++ty) {
+                    for (std::int32_t tx = t.minX / TILE_SIZE; tx <= t.maxX / TILE_SIZE; ++tx) {
+                        TileBin& tile = bins[static_cast<std::size_t>(ty) * tilesX + tx];
+                        (blended ? tile.blended : tile.opaque).push_back(&t);
+                    }
+                }
+            }
         }
     }
 
-    /* Rasterization */
+    /* Rasterization (parallel over tiles) */
 
     sw::Fragment fragmentAt(const sw::Triangle& t, const std::int64_t e[3]) const noexcept
     {
@@ -333,16 +434,14 @@ struct k3::SoftwareRasterizer::Impl
             const std::size_t row = static_cast<std::size_t>(y) * width;
             std::fill(color.begin() + row + x0, color.begin() + row + x1 + 1, environment.clearColor);
             std::fill(depth.begin() + row + x0, depth.begin() + row + x1 + 1, 1.f);
-            std::fill(visibility.begin() + row + x0, visibility.begin() + row + x1 + 1, sw::NO_TRIANGLE);
+            std::fill(visibility.begin() + row + x0, visibility.begin() + row + x1 + 1, nullptr);
         }
 
-        const auto& tile = bins[static_cast<std::size_t>(ty) * tilesX + tx];
-        const auto firstBlend = std::lower_bound(tile.begin(), tile.end(), firstBlendTriangle);
+        const TileBin& tile = bins[static_cast<std::size_t>(ty) * tilesX + tx];
 
         // 1. Opaque and alpha-tested geometry: keep the nearest triangle of every pixel.
-        for (auto it = tile.begin(); it != firstBlend; ++it) {
-            const std::uint32_t id = *it;
-            const sw::Triangle& t = triangles[id];
+        for (const sw::Triangle* triangle : tile.opaque) {
+            const sw::Triangle& t = *triangle;
             const sw::DrawState& state = drawStates[t.draw];
 
             forEachCoveredPixel(t, x0, y0, x1, y1, [&](std::int32_t x, std::int32_t y, const std::int64_t e[3]) {
@@ -354,7 +453,7 @@ struct k3::SoftwareRasterizer::Impl
                 if (state.alphaTest && sw::coverage(*state.material, fragmentAt(t, e)) < state.material->alphaCutoff)
                     return;
                 depth[index] = z;
-                visibility[index] = id;
+                visibility[index] = triangle;
             });
         }
 
@@ -362,24 +461,23 @@ struct k3::SoftwareRasterizer::Impl
         for (std::int32_t y = y0; y <= y1; ++y) {
             for (std::int32_t x = x0; x <= x1; ++x) {
                 const std::size_t index = static_cast<std::size_t>(y) * width + x;
-                const std::uint32_t id = visibility[index];
+                const sw::Triangle* t = visibility[index];
 
-                if (id == sw::NO_TRIANGLE)
+                if (!t)
                     continue;
 
-                const sw::Triangle& t = triangles[id];
                 std::int64_t e[3];
-                t.edgesAt(x, y, e);
+                t->edgesAt(x, y, e);
 
-                Math::Color c = sw::shade(shading, *drawStates[t.draw].material, fragmentAt(t, e));
+                Math::Color c = sw::shade(shading, *drawStates[t->draw].material, fragmentAt(*t, e));
                 c.a = 1.f;
                 color[index] = c;
             }
         }
 
         // 3. Blended geometry, already sorted back to front: depth-tested against the opaque result, not written.
-        for (auto it = firstBlend; it != tile.end(); ++it) {
-            const sw::Triangle& t = triangles[*it];
+        for (const sw::Triangle* triangle : tile.blended) {
+            const sw::Triangle& t = *triangle;
             const Material& material = *drawStates[t.draw].material;
 
             forEachCoveredPixel(t, x0, y0, x1, y1, [&](std::int32_t x, std::int32_t y, const std::int64_t e[3]) {
@@ -402,9 +500,8 @@ struct k3::SoftwareRasterizer::Impl
 };
 
 k3::SoftwareRasterizer::SoftwareRasterizer(std::uint32_t width, std::uint32_t height, unsigned threads)
-    : m_impl(std::make_unique<Impl>())
+    : m_impl(std::make_unique<Impl>(threads))
 {
-    m_impl->threads = threads;
     m_impl->resize(width, height);
 }
 
@@ -423,6 +520,11 @@ std::uint32_t k3::SoftwareRasterizer::width() const noexcept
 std::uint32_t k3::SoftwareRasterizer::height() const noexcept
 {
     return m_impl->height;
+}
+
+unsigned k3::SoftwareRasterizer::threadCount() const noexcept
+{
+    return m_impl->pool.size();
 }
 
 void k3::SoftwareRasterizer::beginFrame(const Camera& camera, const Environment& environment)
@@ -459,23 +561,17 @@ void k3::SoftwareRasterizer::endFrame()
         it->viewDepth = -impl.view.transformPoint(it->transform.transformPoint(it->mesh->bounds().center())).z;
     std::stable_sort(firstBlended, impl.commands.end(), [](const DrawCommand& a, const DrawCommand& b) { return a.viewDepth > b.viewDepth; });
 
-    impl.drawStates.clear();
-    impl.triangles.clear();
-    for (auto it = impl.commands.begin(); it != firstBlended; ++it)
-        impl.geometry(*it, it->material && it->material->doubleSided ? Faces::All : Faces::Front);
-    impl.firstBlendTriangle = static_cast<std::uint32_t>(impl.triangles.size());
-    // A double-sided blended mesh (a glass box) shows its inside through its outside: draw the faces
-    // turned away from the camera first, so they end up behind whatever the triangle order is.
-    for (auto it = firstBlended; it != impl.commands.end(); ++it) {
-        if (it->material->doubleSided)
-            impl.geometry(*it, Faces::Back);
-        impl.geometry(*it, Faces::Front);
-    }
-
+    impl.planJobs(static_cast<std::size_t>(firstBlended - impl.commands.begin()));
+    impl.pool.parallelFor(impl.vertexJobs.size(), [&](std::size_t j) {
+        impl.transformVertices(impl.vertexJobs[j]);
+    });
+    impl.pool.parallelFor(impl.geometryJobs.size(), [&](std::size_t j) {
+        impl.assemble(impl.geometryJobs[j], impl.jobTriangles[j]);
+    });
     impl.bin();
-    for (std::uint32_t ty = 0; ty < impl.tilesY; ++ty)
-        for (std::uint32_t tx = 0; tx < impl.tilesX; ++tx)
-            impl.renderTile(tx, ty);
+    impl.pool.parallelFor(static_cast<std::size_t>(impl.tilesX) * impl.tilesY, [&](std::size_t tile) {
+        impl.renderTile(static_cast<std::uint32_t>(tile % impl.tilesX), static_cast<std::uint32_t>(tile / impl.tilesX));
+    });
 
     // Draw states point into the recorded materials: drop both together.
     impl.drawStates.clear();
@@ -485,7 +581,7 @@ void k3::SoftwareRasterizer::endFrame()
 
 k3::Image k3::SoftwareRasterizer::readPixels()
 {
-    const auto& impl = *m_impl;
+    auto& impl = *m_impl;
     Image image;
 
     image.width = impl.width;
@@ -493,14 +589,16 @@ k3::Image k3::SoftwareRasterizer::readPixels()
     image.pixels.resize(impl.color.size() * 4);
 
     const std::uint8_t* encode = srgb::encodeTable();
-    for (std::size_t i = 0; i < impl.color.size(); ++i) {
-        const Math::Color& c = impl.color[i];
+    impl.pool.parallelFor(impl.height, [&](std::size_t y) {
+        for (std::size_t i = y * impl.width; i < (y + 1) * impl.width; ++i) {
+            const Math::Color& c = impl.color[i];
 
-        image.pixels[i * 4 + 0] = srgb::encode(c.r, encode);
-        image.pixels[i * 4 + 1] = srgb::encode(c.g, encode);
-        image.pixels[i * 4 + 2] = srgb::encode(c.b, encode);
-        image.pixels[i * 4 + 3] = static_cast<std::uint8_t>(std::clamp(c.a, 0.f, 1.f) * 255.f + 0.5f);
-    }
+            image.pixels[i * 4 + 0] = srgb::encode(c.r, encode);
+            image.pixels[i * 4 + 1] = srgb::encode(c.g, encode);
+            image.pixels[i * 4 + 2] = srgb::encode(c.b, encode);
+            image.pixels[i * 4 + 3] = static_cast<std::uint8_t>(std::clamp(c.a, 0.f, 1.f) * 255.f + 0.5f);
+        }
+    });
     return image;
 }
 
