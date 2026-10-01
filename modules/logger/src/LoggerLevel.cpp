@@ -1,6 +1,7 @@
 #include "LoggerLevel.hpp"
 #include <ctime>
 #include <iomanip>
+#include <sstream>
 
 const char *ColorToLevel(LoggerLevel level)
 {

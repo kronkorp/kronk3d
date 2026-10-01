@@ -6,14 +6,21 @@ target_compile_options(KRONK3D_OPTIONS INTERFACE
     $<$<CONFIG:Release>:${PROJECT_RELEASE_FLAGS}>
 )
 
-target_link_libraries(KRONK3D_OPTIONS INTERFACE
-    stdc++exp
-)
-
-target_link_options(KRONK3D_OPTIONS INTERFACE
-    -rdynamic
-)
-
 target_compile_definitions(KRONK3D_OPTIONS INTERFACE
     $<$<CONFIG:Debug>:_DEBUG>
 )
+
+if (WIN32)
+    target_compile_definitions(KRONK3D_OPTIONS INTERFACE
+        NOMINMAX                  # <windows.h> must not break std::min / std::max
+        WIN32_LEAN_AND_MEAN
+        _CRT_SECURE_NO_WARNINGS   # fopen & co. (stb_image, logger)
+    )
+endif()
+
+# Exports every symbol to the dynamic table so backtraces can resolve names (ELF only).
+if (CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    target_link_options(KRONK3D_OPTIONS INTERFACE
+        -rdynamic
+    )
+endif()

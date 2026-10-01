@@ -53,7 +53,7 @@ namespace k3
                         return i;
                     }
                 }
-                return -1UL;
+                return static_cast<RegistryKey>(-1);
             }
 
         private:

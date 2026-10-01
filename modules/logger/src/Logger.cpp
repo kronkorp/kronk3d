@@ -6,8 +6,23 @@
 #include <memory>
 #include <ostream>
 #include <vector>
-#include <unistd.h>
+#include <cstdio>
 #include <ctime>
+
+#ifdef _WIN32
+    #include <io.h>
+#else
+    #include <unistd.h>
+#endif
+
+static bool isTerminal(std::FILE* stream)
+{
+#ifdef _WIN32
+    return _isatty(_fileno(stream)) != 0;
+#else
+    return isatty(fileno(stream)) != 0;
+#endif
+}
 
 Logger::Logger() {}
 
@@ -20,8 +35,8 @@ Logger::Logger(std::shared_ptr<std::ostream> handler)
 
 void Logger::registerHandler(std::shared_ptr<std::ostream> handler)
 {
-    if ((handler->rdbuf() == std::cout.rdbuf() && isatty(STDOUT_FILENO)) ||
-        (handler->rdbuf() == std::cerr.rdbuf() && isatty(STDERR_FILENO))) {
+    if ((handler->rdbuf() == std::cout.rdbuf() && isTerminal(stdout)) ||
+        (handler->rdbuf() == std::cerr.rdbuf() && isTerminal(stderr))) {
             this->m_handlers.push_back(std::make_unique<TtyLoggerHandler>(handler));
     } else {
             this->m_handlers.push_back(std::make_unique<FileLoggerHandler>(handler));
