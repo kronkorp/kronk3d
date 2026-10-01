@@ -1,5 +1,5 @@
 #pragma once
 
-#include "utils/Mesh.hpp"
+#include "scene/Mesh.hpp"
 
 extern const k3::Mesh cube;

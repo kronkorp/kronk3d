@@ -1,67 +1,73 @@
 #include <SFML/Graphics.hpp>
-#include <SFML/Graphics/Image.hpp>
 #include "Color.hpp"
 #include "Matrix.hpp"
 #include "Rasterizer.hpp"
-#include "utils/Mesh.hpp"
+#include "io/ObjLoader.hpp"
+#include "scene/Model.hpp"
 #include "utils/Viewport.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <filesystem>
 #include <format>
+#include <iostream>
+#include <memory>
 #include <numbers>
+#include <vector>
 #include "cube/Cube.hpp"
 #include "cube/CubeTextured.hpp"
 
-static sf::Image toImage(const std::vector<k3::Math::Color>& pixels, size_t width, size_t height)
+#ifndef K3_EXAMPLE_ASSETS_DIR
+    #define K3_EXAMPLE_ASSETS_DIR "example/assets"
+#endif
+
+static void toRGBA8(const std::vector<k3::Math::Color>& pixels, std::vector<std::uint8_t>& out)
 {
-    sf::Image image;
-    image.create(width, height, sf::Color::Black);
+    out.resize(pixels.size() * 4);
 
-    for (size_t y = 0; y < height; y++)
-    {
-        for (size_t x = 0; x < width; x++)
-        {
-            const k3::Math::Color& color = pixels[x + y * width];
+    for (std::size_t i = 0; i < pixels.size(); ++i) {
+        const k3::Math::Color& color = pixels[i];
 
-            image.setPixel(x, y, sf::Color(
-                static_cast<std::uint8_t>(std::clamp(color.r, 0.f, 1.f) * 255.f),
-                static_cast<std::uint8_t>(std::clamp(color.g, 0.f, 1.f) * 255.f),
-                static_cast<std::uint8_t>(std::clamp(color.b, 0.f, 1.f) * 255.f),
-                static_cast<std::uint8_t>(std::clamp(color.a, 0.f, 1.f) * 255.f)
-            ));
-        }
+        out[i * 4 + 0] = static_cast<std::uint8_t>(std::clamp(color.r, 0.f, 1.f) * 255.f);
+        out[i * 4 + 1] = static_cast<std::uint8_t>(std::clamp(color.g, 0.f, 1.f) * 255.f);
+        out[i * 4 + 2] = static_cast<std::uint8_t>(std::clamp(color.b, 0.f, 1.f) * 255.f);
+        out[i * 4 + 3] = 255;
     }
-
-    return image;
 }
 
 int main(void)
 {
-    static constexpr size_t WIDTH = 800;
-    static constexpr size_t HEIGHT = 600;
+    static constexpr unsigned WIDTH = 800;
+    static constexpr unsigned HEIGHT = 600;
+
+    const std::filesystem::path assets = K3_EXAMPLE_ASSETS_DIR;
+
+    // 1: textured cube, 2: vertex-colored cube, 3: Spot (OBJ + MTL + texture)
+    const k3::Model texturedCube = makeTexturedCube(assets / "stone.png");
+    const k3::Model coloredCube{"colored cube", {{std::make_shared<k3::Mesh>(cube), std::make_shared<k3::Material>()}}};
+    auto spot = k3::ObjLoader::load(assets / "spot" / "spot.obj");
+
+    if (!spot) {
+        std::cerr << "Cannot load Spot: " << spot.error() << std::endl;
+        return 1;
+    }
+
+    const k3::Model* scenes[] = {&texturedCube, &coloredCube, &*spot};
+    std::size_t currentScene = 2;
 
     k3::Rasterizer engine(WIDTH, HEIGHT);
 
     sf::RenderWindow window(sf::VideoMode(WIDTH, HEIGHT), "kronk3d");
     sf::Texture texture;
     sf::Sprite sprite;
+    std::vector<std::uint8_t> rgba;
 
-    // k3::Mesh mesh{
-    //     .vertices = {
-    //         {-0.5f, -0.5f, 0.f},
-    //         {-0.5f, 0.5f, 0.f},
-    //         {0.5f, -0.5f, 0.f},
-    //         {0.5f, 0.5f, 0.f},
-    //     },
-    //     .colors = {k3::Math::Color::Red, k3::Math::Color::Blue, k3::Math::Color::Green, k3::Math::Color::Yellow},
-    //     .indices = {0, 1, 2, 2, 1, 3},
-    //     .count = 6  // 3 segment
-    // };
+    texture.create(WIDTH, HEIGHT);
+    sprite.setTexture(texture, true);
 
     k3::Viewport viewport{
         0,
-        HEIGHT,
+        WIDTH,
         0,
         HEIGHT
     };
@@ -84,6 +90,8 @@ int main(void)
         while (window.pollEvent(event)) {
             if (event.type == sf::Event::Closed)
                 window.close();
+            if (event.type == sf::Event::KeyPressed && event.key.code >= sf::Keyboard::Num1 && event.key.code <= sf::Keyboard::Num3)
+                currentScene = static_cast<std::size_t>(event.key.code - sf::Keyboard::Num1);
         }
 
         const auto frameNow = Clock::now();
@@ -111,30 +119,24 @@ int main(void)
 
         // View = inverse of the camera's world transform, shared by every mesh in the scene.
         const auto view = k3::Math::Matrix4::translate({-cameraPosition.x, -cameraPosition.y, -cameraPosition.z});
-        // Model = this mesh's own placement/animation in world space.
-        const auto model = k3::Math::Matrix4::rotateZX(rotationAngle) * k3::Math::Matrix4::rotateYZ(rotationAngle);
+        // Model = this mesh's own placement/animation in world space, centered and scaled to fit a 2-unit cube.
+        const auto bounds = scenes[currentScene]->bounds();
+        const auto fit = k3::Math::Matrix4::scale(1.5f / bounds.radius())
+            * k3::Math::Matrix4::translate(-bounds.center());
+        const auto model = k3::Math::Matrix4::rotateZX(rotationAngle) * k3::Math::Matrix4::rotateYZ(rotationAngle * 0.5f) * fit;
+        const auto projection = k3::Math::Matrix4::perspective(0.01f, 100.f, std::numbers::pi_v<float> / 3.f, static_cast<float>(WIDTH) / HEIGHT);
 
         const auto drawStart = Clock::now();
-        engine.draw(
-            cubeTextured,
-            viewport,
-            k3::Math::Matrix4::perspective(0.01f, 10.f, std::numbers::pi_v<float> / 3.f, WIDTH * 1.f / WIDTH) * view * model,
-            k3::Rasterizer::Cull::None
-        );
+        engine.draw(*scenes[currentScene], viewport, projection * view * model);
 
         const auto drawEnd = Clock::now();
         drawTimeAccumulatedMs += std::chrono::duration<double, std::milli>(drawEnd - drawStart).count();
 
+        toRGBA8(engine.framebuffer(), rgba);
+        texture.update(rgba.data());
+
         window.clear(sf::Color::Black);
-
-        const auto& framebuffer = engine.framebuffer();
-        if (framebuffer.size() == WIDTH * HEIGHT) {
-            sf::Image image = toImage(framebuffer, WIDTH, HEIGHT);
-            texture.loadFromImage(image);
-            sprite.setTexture(texture, true);
-            window.draw(sprite);
-        }
-
+        window.draw(sprite);
         window.display();
 
         frameCount++;
@@ -145,7 +147,7 @@ int main(void)
             const double fps = frameCount / elapsedSeconds;
             const double avgDrawMs = drawTimeAccumulatedMs / frameCount;
 
-            window.setTitle(std::format("kronk3d — FPS: {:.1f} | draw: {:.3f} ms", fps, avgDrawMs));
+            window.setTitle(std::format("kronk3d — {} — FPS: {:.1f} | draw: {:.3f} ms [1-3: scene]", scenes[currentScene]->name, fps, avgDrawMs));
 
             frameCount = 0;
             drawTimeAccumulatedMs = 0.0;

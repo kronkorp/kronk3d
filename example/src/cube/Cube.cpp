@@ -1,6 +1,6 @@
 #include "Cube.hpp"
 #include "Vector.hpp"
-#include <cstddef>
+#include <cstdint>
 #include <iterator>
 #include <vector>
 
@@ -82,7 +82,7 @@ static k3::Math::Color cube_colors[] =
     {0.f, 0.f, 1.f, 1.f},
 };
 
-static size_t cube_indices[] =
+static std::uint32_t cube_indices[] =
 {
     // -X face
     0,  2,  1,
@@ -111,9 +111,7 @@ static size_t cube_indices[] =
 
 const k3::Mesh cube
 {
-    std::vector<k3::Math::Vector3f>(std::begin(cube_positions), std::end(cube_positions)),
-    {},
-    std::vector<k3::Math::Color>(std::begin(cube_colors), std::end(cube_colors)),
-    std::vector<std::size_t>(std::begin(cube_indices), std::end(cube_indices)),
-    36
+    .positions = std::vector<k3::Math::Vector3f>(std::begin(cube_positions), std::end(cube_positions)),
+    .colors    = std::vector<k3::Math::Color>(std::begin(cube_colors), std::end(cube_colors)),
+    .indices   = std::vector<std::uint32_t>(std::begin(cube_indices), std::end(cube_indices)),
 };

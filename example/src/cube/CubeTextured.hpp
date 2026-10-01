@@ -1,5 +1,6 @@
 #pragma once
 
-#include "utils/Mesh.hpp"
+#include "scene/Model.hpp"
+#include <filesystem>
 
-extern const k3::Mesh cubeTextured;
+k3::Model makeTexturedCube(const std::filesystem::path& texturePath);
