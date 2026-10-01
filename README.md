@@ -56,7 +56,26 @@ and otherwise downloads and builds it, so nothing has to be installed by hand on
 | `K3_BUILD_TESTS` | ON when top-level | Builds `kronk3d_tests` |
 | `K3_BUILD_GL_TESTS` | `K3_BUILD_TESTS` | Builds `kronk3d_gl_tests`. These tests skip when no OpenGL 3.3 context is available, unless `K3_REQUIRE_GL` is set |
 
-The CMake targets are `kronk3d_static` and `kronk3d_shared`.
+### Using kronk3d from another project
+
+As a subdirectory (`add_subdirectory(kronk3d)`), or installed with
+`cmake --install build --prefix <dir>`; in both cases, link one of the two flavours:
+
+```cmake
+find_package(kronk3d 0.1 REQUIRED)        # Installed: add <dir> to CMAKE_PREFIX_PATH
+target_link_libraries(app PRIVATE kronk3d::static)      # or kronk3d::shared
+```
+
+### Logs
+
+kronk3d reports problems (a missing texture, an unknown material…) on the console. To redirect or
+silence these messages:
+
+```cpp
+k3::setLogSink([](k3::LogLevel level, std::string_view message) { myLogger.write(level, message); });
+k3::setLogSink(nullptr);                  // Silence
+k3::setLogLevel(k3::LogLevel::Warning);   // Drop Info messages
+```
 
 ## Quick start
 

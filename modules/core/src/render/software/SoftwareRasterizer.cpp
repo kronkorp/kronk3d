@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <unordered_map>
 #include <utility>
 
 namespace
@@ -187,6 +188,18 @@ struct k3::SoftwareRasterizer::Impl
 
     Pass mainPass;
     Pass shadowPass;
+
+    // Local bounds of every mesh drawn recently: computing them walks all the vertices, so it is done
+    // once per mesh, not once per frame. Meshes are immutable once drawn, as for the GPU backends.
+    struct CachedBounds
+    {
+        std::weak_ptr<const Mesh> source;
+        Math::Bounds3f            bounds{};
+        bool                      valid = false;
+    };
+    std::unordered_map<const Mesh*, CachedBounds> boundsCache;     // Node addresses are stable
+    std::vector<CachedBounds*>                    boundsToCompute;
+    std::vector<const CachedBounds*>              drawBounds;          // Per draw
 
     FrameStats stats{};
 
@@ -457,6 +470,42 @@ struct k3::SoftwareRasterizer::Impl
         }
     }
 
+    /* Bounds */
+
+    void computeBounds()
+    {
+        boundsToCompute.clear();
+        drawBounds.clear();
+        for (const DrawCommand& command : commands) {
+            CachedBounds& cached = boundsCache[command.mesh.get()];
+
+            drawBounds.push_back(&cached);
+
+            // Stale entry: its mesh is gone and this one reuses the address.
+            if (cached.valid && cached.source.expired())
+                cached.valid = false;
+            if (!cached.valid && cached.source.lock() != command.mesh) {
+                cached.source = command.mesh;
+                boundsToCompute.push_back(&cached);
+            }
+        }
+
+        pool.parallelFor(boundsToCompute.size(), [&](std::size_t i) {
+            CachedBounds& cached = *boundsToCompute[i];
+            cached.bounds = cached.source.lock()->bounds();
+            cached.valid = true;
+        });
+        pool.parallelFor(commands.size(), [&](std::size_t d) {
+            DrawCommand& command = commands[d];
+            command.bounds = drawBounds[d]->bounds.transformed(command.transform);
+        });
+    }
+
+    void collectBounds()
+    {
+        std::erase_if(boundsCache, [](const auto& entry) { return entry.second.source.expired(); });
+    }
+
     /* Shadows */
 
     // Renders the shadow map of the shadow-casting light (if any) and hands it to the shading context.
@@ -697,10 +746,7 @@ void k3::SoftwareRasterizer::endFrame()
     auto& impl = *m_impl;
     const auto start = std::chrono::steady_clock::now();
 
-    impl.pool.parallelFor(impl.commands.size(), [&](std::size_t d) {
-        DrawCommand& command = impl.commands[d];
-        command.bounds = command.mesh->bounds().transformed(command.transform);
-    });
+    impl.computeBounds();
 
     // Opaque and alpha-tested draws keep their order, blended ones go last, farthest first.
     const auto firstBlended = std::stable_partition(impl.commands.begin(), impl.commands.end(), [](const DrawCommand& c) { return !isBlended(c); });
@@ -720,6 +766,7 @@ void k3::SoftwareRasterizer::endFrame()
     impl.drawStates.clear();
     impl.commands.clear();
     impl.shading.shadow = {};
+    impl.collectBounds();
     impl.stats.frameMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
 

@@ -1,5 +1,5 @@
 #include "ObjLoader.hpp"
-#include "Logger.hpp"
+#include "utils/Log.hpp"
 #include <algorithm>
 #include <cctype>
 #include <charconv>
@@ -321,7 +321,7 @@ namespace
         while (!rest.empty()) {
             std::string_view name = nextToken(rest);
             if (!name.empty() && !tryLoad(name))
-                Logger::logger().warn("OBJ: cannot open material library {}", name);
+                k3::log(k3::LogLevel::Warning, "OBJ: cannot open material library {}", name);
         }
     }
 
@@ -526,7 +526,7 @@ namespace
                     b.material = it->second;
                 } else {
                     if (!materialName.empty())
-                        Logger::logger().warn("OBJ: unknown material {}, using a default one", materialName);
+                        k3::log(k3::LogLevel::Warning, "OBJ: unknown material {}, using a default one", materialName);
                     b.material = std::make_shared<k3::Material>();
                     b.material->name = materialName;
                 }
@@ -628,6 +628,6 @@ k3::Result<k3::Model> k3::ObjLoader::load(const std::filesystem::path& path, con
     for (const auto& primitive : model->primitives)
         triangles += primitive.mesh->triangleCount();
     model->name = path.stem().string();
-    Logger::logger().info("Loaded {}: {} primitive(s), {} triangles", path.string(), model->primitives.size(), triangles);
+    log(LogLevel::Info, "Loaded {}: {} primitive(s), {} triangles", path.string(), model->primitives.size(), triangles);
     return model;
 }

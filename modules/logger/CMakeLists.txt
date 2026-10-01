@@ -14,4 +14,5 @@ apply_project_settings(logger)
 ###
 
 # target_link_libraries(logger PRIVATE api)
-target_include_directories(logger PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/)
+target_include_directories(logger PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/>)
+set_target_properties(logger PROPERTIES EXPORT_NAME logger)

@@ -1,5 +1,5 @@
 #include "Texture.hpp"
-#include "Logger.hpp"
+#include "utils/Log.hpp"
 #include "utils/Srgb.hpp"
 #include <algorithm>
 #include <utility>
@@ -62,7 +62,7 @@ std::shared_ptr<k3::Texture> k3::Texture::load(const std::filesystem::path& path
     auto image = Image::load(path);
 
     if (!image) {
-        Logger::logger().error("Failed to load texture {}", image.error());
+        log(LogLevel::Error, "Failed to load texture {}", image.error());
         return nullptr;
     }
     return std::make_shared<Texture>(std::move(*image), colorSpace);

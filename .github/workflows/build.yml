@@ -60,6 +60,17 @@ jobs:
           xvfb-run -a ./build/bin/kronk3d_example --backend software --scene 4 --screenshot software.png
           xvfb-run -a ./build/bin/kronk3d_example --backend opengl --scene 4 --screenshot opengl.png
 
+      # Another project consuming the installed package through find_package(kronk3d).
+      - name: Install and consume the package
+        if: matrix.build_type == 'Release'
+        run: |
+          cmake --install build --prefix "$PWD/install"
+          for link in static shared; do
+            cmake -S modules/test/package -B consumer-$link -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} -DCMAKE_PREFIX_PATH="$PWD/install" -DK3_LINK=$link
+            cmake --build consumer-$link
+            LD_LIBRARY_PATH="$PWD/install/lib" ./consumer-$link/kronk3d_consumer
+          done
+
   windows-msvc:
     name: Windows MSVC (${{ matrix.build_type }})
     runs-on: windows-latest
@@ -82,6 +93,14 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build -C ${{ matrix.build_type }} --output-on-failure
+
+      - name: Install and consume the package
+        if: matrix.build_type == 'Release'
+        run: |
+          cmake --install build --config Release --prefix "$PWD/install"
+          cmake -S modules/test/package -B consumer -A x64 -DCMAKE_PREFIX_PATH="$PWD/install"
+          cmake --build consumer --config Release
+          ./consumer/Release/kronk3d_consumer.exe
 
   windows-mingw:
     name: Windows MinGW (Release)

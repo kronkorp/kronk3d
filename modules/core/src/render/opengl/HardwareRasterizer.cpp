@@ -1,6 +1,6 @@
 #include "HardwareRasterizer.hpp"
 #include "GL.hpp"
-#include "Logger.hpp"
+#include "utils/Log.hpp"
 #include "Program.hpp"
 #include "Shaders.hpp"
 #include "render/ShadowFit.hpp"
@@ -239,7 +239,7 @@ struct k3::HardwareRasterizer::Impl
         FramebufferTexture2D(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, colorTexture, 0);
         FramebufferTexture2D(FRAMEBUFFER, DEPTH_ATTACHMENT, TEXTURE_2D, depthTexture, 0);
         if (CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE)
-            Logger::logger().error("OpenGL: incomplete render target {}x{}", w, h);
+            log(LogLevel::Error, "OpenGL: incomplete render target {}x{}", w, h);
         BindFramebuffer(FRAMEBUFFER, 0);
     }
 
@@ -259,7 +259,7 @@ struct k3::HardwareRasterizer::Impl
         DrawBuffer(NONE);
         ReadBuffer(NONE);
         if (CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE)
-            Logger::logger().error("OpenGL: incomplete shadow map {}x{}", size, size);
+            log(LogLevel::Error, "OpenGL: incomplete shadow map {}x{}", size, size);
     }
 
     /* Resource cache */
@@ -666,7 +666,7 @@ k3::Result<std::unique_ptr<k3::HardwareRasterizer>> k3::HardwareRasterizer::crea
     auto impl = std::make_unique<Impl>(std::move(*mesh), std::move(*shadow));
     impl->driver = std::string(version) + " / " + (renderer ? renderer : "unknown");
     impl->resize(width, height);
-    Logger::logger().info("OpenGL rasterizer on {}", impl->driver);
+    log(LogLevel::Info, "OpenGL rasterizer on {}", impl->driver);
     return std::unique_ptr<HardwareRasterizer>(new HardwareRasterizer(std::move(impl)));
 }
 

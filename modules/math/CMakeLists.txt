@@ -11,4 +11,9 @@ apply_project_settings(math)
 
 ###
 
-target_include_directories(math PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/)
+target_include_directories(math PUBLIC
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/kronk3d>
+)
+set_target_properties(math PROPERTIES EXPORT_NAME math)
+add_library(kronk3d::math ALIAS math)
