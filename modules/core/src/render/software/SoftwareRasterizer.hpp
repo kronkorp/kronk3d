@@ -44,7 +44,7 @@ namespace k3
             [[nodiscard]] Image readPixels() override;
             [[nodiscard]] const FrameStats& stats() const noexcept override;
 
-            // Last rendered frame in linear space (not gamma-encoded), row-major, top row first.
+            // Last rendered frame in linear space (not gamma-encoded), clamped to [0, 1], row-major, top row first.
             [[nodiscard]] const std::vector<Math::Color>& colorBuffer() const noexcept;
 
         private:

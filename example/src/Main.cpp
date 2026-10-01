@@ -1,12 +1,16 @@
-#include <SFML/Graphics.hpp>
+#include <SFML/Window.hpp>
 #include "Kronk3d.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <cmath>
 #include <filesystem>
 #include <format>
 #include <iostream>
 #include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
 #include "cube/Cube.hpp"
 #include "cube/CubeTextured.hpp"
 #include "scenes/Floor.hpp"
@@ -65,12 +69,49 @@ namespace
         camera.pitch = std::clamp(camera.pitch, -MAX_PITCH, MAX_PITCH);
     }
 
+    struct Options
+    {
+        k3::Backend backend = k3::Backend::Software;
+        std::size_t scene = 2;
+        std::string screenshot{};   // Render a few frames, save the last one there and quit
+    };
+
+    std::optional<Options> parseOptions(int argc, char** argv)
+    {
+        Options options;
+
+        for (int i = 1; i < argc; ++i) {
+            const std::string_view arg = argv[i];
+            const bool hasValue = i + 1 < argc;
+
+            if (arg == "--backend" && hasValue) {
+                const std::string_view value = argv[++i];
+                if (value != "software" && value != "opengl")
+                    return std::nullopt;
+                options.backend = value == "opengl" ? k3::Backend::OpenGL : k3::Backend::Software;
+            } else if (arg == "--scene" && hasValue) {
+                options.scene = static_cast<std::size_t>(std::clamp(std::atoi(argv[++i]), 1, 4) - 1);
+            } else if (arg == "--screenshot" && hasValue) {
+                options.screenshot = argv[++i];
+            } else {
+                return std::nullopt;
+            }
+        }
+        return options;
+    }
+
 }
 
-int main(void)
+int main(int argc, char** argv)
 {
     static constexpr unsigned WIDTH = 800;
     static constexpr unsigned HEIGHT = 600;
+
+    const auto options = parseOptions(argc, argv);
+    if (!options) {
+        std::cerr << "usage: " << argv[0] << " [--backend software|opengl] [--scene 1-4] [--screenshot file.png]" << std::endl;
+        return 2;
+    }
 
     const std::filesystem::path assets = K3_EXAMPLE_ASSETS_DIR;
 
@@ -88,21 +129,39 @@ int main(void)
     const k3::Model* scenes[] = {&texturedCube, &coloredCube, &*spot, &transparency};
     // Models are scaled to a 1.5 radius around the origin: the floor sits right under them.
     const k3::Model floor = makeFloor(8.f, -1.55f);
-    std::size_t currentScene = 2;
+    std::size_t currentScene = options->scene;
 
-    auto created = k3::createRasterizer(k3::Backend::Software, {.width = WIDTH, .height = HEIGHT});
-    if (!created) {
-        std::cerr << "Cannot create the rasterizer: " << created.error() << std::endl;
+    // An OpenGL 3.3 core context: the hardware backend renders into it, and the software backend's
+    // images are shown through it (ImagePresenter).
+    const sf::ContextSettings settings(24, 8, 0, 3, 3, sf::ContextSettings::Core);
+    sf::Window window(sf::VideoMode(WIDTH, HEIGHT), "kronk3d", sf::Style::Default, settings);
+    window.setVerticalSyncEnabled(false);
+    window.setActive(true);
+
+    const k3::GLLoader loader = [](const char* name) { return sf::Context::getFunction(name); };
+    auto presenter = k3::ImagePresenter::create(loader);
+    if (!presenter) {
+        std::cerr << "Cannot initialize OpenGL: " << presenter.error() << std::endl;
         return 1;
     }
-    std::unique_ptr<k3::IRasterizer> rasterizer = std::move(*created);
 
-    sf::RenderWindow window(sf::VideoMode(WIDTH, HEIGHT), "kronk3d");
-    sf::Texture texture;
-    sf::Sprite sprite;
+    // Tab switches between the software and the OpenGL backend.
+    k3::Backend backend = options->backend;
+    std::unique_ptr<k3::IRasterizer> rasterizer;
+    auto switchTo = [&](k3::Backend wanted) {
+        const sf::Vector2u size = window.getSize();
+        auto created = k3::createRasterizer(wanted, {.width = size.x, .height = size.y, .glLoader = loader});
 
-    texture.create(WIDTH, HEIGHT);
-    sprite.setTexture(texture, true);
+        if (!created) {
+            std::cerr << "Cannot create the rasterizer: " << created.error() << std::endl;
+            return false;
+        }
+        rasterizer = std::move(*created);
+        backend = wanted;
+        return true;
+    };
+    if (!switchTo(backend))
+        return 1;
 
     k3::Camera camera;
     camera.position = {0.f, 0.5f, 4.f};
@@ -132,8 +191,12 @@ int main(void)
         while (window.pollEvent(event)) {
             if (event.type == sf::Event::Closed)
                 window.close();
+            if (event.type == sf::Event::Resized)
+                rasterizer->resize(event.size.width, event.size.height);
             if (event.type == sf::Event::KeyPressed && event.key.code >= sf::Keyboard::Num1 && event.key.code <= sf::Keyboard::Num4)
                 currentScene = static_cast<std::size_t>(event.key.code - sf::Keyboard::Num1);
+            if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::Tab)
+                switchTo(backend == k3::Backend::Software ? k3::Backend::OpenGL : k3::Backend::Software);
         }
 
         const auto frameNow = Clock::now();
@@ -163,11 +226,15 @@ int main(void)
         rasterizer->endFrame();
         frameTimeAccumulatedMs += rasterizer->stats().frameMs;
 
-        const k3::Image image = rasterizer->readPixels();
-        texture.update(image.pixels.data());
+        if (!options->screenshot.empty() && frameCount == 3) {
+            const bool saved = rasterizer->readPixels().savePNG(options->screenshot);
+            std::cout << (saved ? "Saved " : "Cannot save ") << options->screenshot << std::endl;
+            return saved ? 0 : 1;
+        }
 
-        window.clear(sf::Color::Black);
-        window.draw(sprite);
+        // The OpenGL backend already copied its frame to the window; the software one hands an image over.
+        if (backend == k3::Backend::Software)
+            (*presenter)->present(rasterizer->readPixels(), rasterizer->width(), rasterizer->height());
         window.display();
 
         frameCount++;
@@ -179,7 +246,7 @@ int main(void)
             const double avgFrameMs = frameTimeAccumulatedMs / frameCount;
 
             window.setTitle(std::format(
-                "kronk3d [{}] — {} — FPS: {:.1f} | render: {:.2f} ms | {} triangles [1-4: scene]",
+                "kronk3d [{}] — {} — FPS: {:.1f} | render: {:.2f} ms | {} triangles [1-4: scene, Tab: backend]",
                 rasterizer->name(), model.name, fps, avgFrameMs, rasterizer->stats().triangles
             ));
 
