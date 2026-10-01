@@ -34,7 +34,7 @@ jobs:
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build libsfml-dev libgl-dev
+          sudo apt-get install -y ninja-build libsfml-dev libgl-dev xvfb libgl1-mesa-dri
 
       - name: Configure
         run: >
@@ -46,8 +46,19 @@ jobs:
       - name: Build
         run: cmake --build build --parallel
 
+      # Mesa's software OpenGL (llvmpipe) on a virtual display: the OpenGL tests must run, not skip.
       - name: Test
-        run: ctest --test-dir build --output-on-failure
+        env:
+          K3_REQUIRE_GL: 1
+          LIBGL_ALWAYS_SOFTWARE: 1
+        run: xvfb-run -a ctest --test-dir build --output-on-failure
+
+      - name: Run the example on both backends
+        env:
+          LIBGL_ALWAYS_SOFTWARE: 1
+        run: |
+          xvfb-run -a ./build/bin/kronk3d_example --backend software --scene 4 --screenshot software.png
+          xvfb-run -a ./build/bin/kronk3d_example --backend opengl --scene 4 --screenshot opengl.png
 
   windows-msvc:
     name: Windows MSVC (${{ matrix.build_type }})
@@ -89,18 +100,15 @@ jobs:
             mingw-w64-ucrt-x86_64-gcc
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
-            mingw-w64-ucrt-x86_64-freetype
 
       - uses: actions/checkout@v4
 
-      # MSYS2 ships SFML 3, so the example falls back to building SFML 2.6 from
-      # source, against MSYS2's own freetype instead of SFML's prebuilt extlibs.
+      # MSYS2 ships SFML 3, so the build falls back to SFML 2.6 from source (window module only).
       - name: Configure
         run: >
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_POLICY_VERSION_MINIMUM=3.5
-          -DSFML_USE_SYSTEM_DEPS=ON
 
       - name: Build
         run: cmake --build build --parallel
