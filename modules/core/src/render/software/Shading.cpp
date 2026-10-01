@@ -56,18 +56,18 @@ float k3::sw::coverage(const Material& material, const Fragment& fragment) noexc
     float alpha = material.diffuse.a * fragment.color.a;
 
     if (material.diffuseMap)
-        alpha *= sampleTexture(material.diffuseMap.get(), fragment.uv, fragment.lod).a;
+        alpha *= sampleTexture(material.diffuseMap.get(), fragment.uv, fragment.duvdx, fragment.duvdy).a;
     if (material.opacityMap)
-        alpha *= sampleTexture(material.opacityMap.get(), fragment.uv, fragment.lod).r;
+        alpha *= sampleTexture(material.opacityMap.get(), fragment.uv, fragment.duvdx, fragment.duvdy).r;
     return alpha;
 }
 
 k3::Math::Color k3::sw::shade(const ShadingContext& context, const Material& material, const Fragment& fragment) noexcept
 {
-    Math::Color albedo = material.diffuse * fragment.color * sampleTexture(material.diffuseMap.get(), fragment.uv, fragment.lod);
+    Math::Color albedo = material.diffuse * fragment.color * sampleTexture(material.diffuseMap.get(), fragment.uv, fragment.duvdx, fragment.duvdy);
 
     if (material.opacityMap)
-        albedo.a *= sampleTexture(material.opacityMap.get(), fragment.uv, fragment.lod).r;
+        albedo.a *= sampleTexture(material.opacityMap.get(), fragment.uv, fragment.duvdx, fragment.duvdy).r;
     if (material.unlit)
         return albedo;
 
@@ -79,7 +79,7 @@ k3::Math::Color k3::sw::shade(const ShadingContext& context, const Material& mat
     const Vector3f v = context.orthographic ? context.viewDirection : Vector3f::normalize(context.cameraPosition - fragment.position);
     Math::Color specular = material.specular;
     if (material.specularMap)
-        specular = specular * sampleTexture(material.specularMap.get(), fragment.uv, fragment.lod);
+        specular = specular * sampleTexture(material.specularMap.get(), fragment.uv, fragment.duvdx, fragment.duvdy);
     const bool hasSpecular = specular.r > 0.f || specular.g > 0.f || specular.b > 0.f;
     const float shininess = std::max(material.shininess, 1.f);
 

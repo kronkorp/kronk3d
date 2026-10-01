@@ -1,8 +1,8 @@
 #include "SoftwareRasterizer.hpp"
 #include "Clipper.hpp"
 #include "Pipeline.hpp"
-#include "Sampling.hpp"
 #include "Shading.hpp"
+#include "utils/Srgb.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -233,6 +233,20 @@ struct k3::SoftwareRasterizer::Impl
             t.edgeC[i] = -(A * X[a] + B * Y[a]) - (topLeft ? 0 : 1);
         }
 
+        for (int axis = 0; axis < 2; ++axis) {
+            float q = 0.f, qu = 0.f, qv = 0.f;
+
+            for (int i = 0; i < 3; ++i) {
+                const float step = static_cast<float>((axis == 0 ? t.edgeA[i] : t.edgeB[i]) * sw::SUBPIXEL_ONE) * t.invW[i];
+                q += step;
+                qu += step * t.varyings[i][sw::TexU];
+                qv += step * t.varyings[i][sw::TexV];
+            }
+            t.qStep[axis] = q;
+            t.uStep[axis] = qu;
+            t.vStep[axis] = qv;
+        }
+
         t.invArea = 1.f / static_cast<float>(area);
         t.minX = static_cast<std::int32_t>(std::max<std::int64_t>(0, std::min({X[0], X[1], X[2]}) >> sw::SUBPIXEL_BITS));
         t.minY = static_cast<std::int32_t>(std::max<std::int64_t>(0, std::min({Y[0], Y[1], Y[2]}) >> sw::SUBPIXEL_BITS));
@@ -269,7 +283,7 @@ struct k3::SoftwareRasterizer::Impl
         float l0 = static_cast<float>(e[0]) * t.invW[0];
         float l1 = static_cast<float>(e[1]) * t.invW[1];
         float l2 = static_cast<float>(e[2]) * t.invW[2];
-        const float inv = 1.f / (l0 + l1 + l2);
+        const float inv = 1.f / (l0 + l1 + l2);     // 1 / q
 
         l0 *= inv;
         l1 *= inv;
@@ -282,12 +296,15 @@ struct k3::SoftwareRasterizer::Impl
         for (int k = 0; k < count; ++k)
             v[k] = l0 * t.varyings[0][k] + l1 * t.varyings[1][k] + l2 * t.varyings[2][k];
 
+        const float u = v[sw::TexU], tv = v[sw::TexV];
+
         return {
             {v[sw::WorldX], v[sw::WorldY], v[sw::WorldZ]},
             {v[sw::NormalX], v[sw::NormalY], v[sw::NormalZ]},
-            {v[sw::TexU], v[sw::TexV]},
+            {u, tv},
+            {(t.uStep[0] - u * t.qStep[0]) * inv, (t.vStep[0] - tv * t.qStep[0]) * inv},
+            {(t.uStep[1] - u * t.qStep[1]) * inv, (t.vStep[1] - tv * t.qStep[1]) * inv},
             hasColors ? Math::Color{v[sw::ColorR], v[sw::ColorG], v[sw::ColorB], v[sw::ColorA]} : Math::Color::White,
-            0.f,
             t.frontFacing,
         };
     }
@@ -462,12 +479,14 @@ k3::Image k3::SoftwareRasterizer::readPixels()
     image.width = impl.width;
     image.height = impl.height;
     image.pixels.resize(impl.color.size() * 4);
+
+    const std::uint8_t* encode = srgb::encodeTable();
     for (std::size_t i = 0; i < impl.color.size(); ++i) {
         const Math::Color& c = impl.color[i];
 
-        image.pixels[i * 4 + 0] = sw::linearToSrgbByte(c.r);
-        image.pixels[i * 4 + 1] = sw::linearToSrgbByte(c.g);
-        image.pixels[i * 4 + 2] = sw::linearToSrgbByte(c.b);
+        image.pixels[i * 4 + 0] = srgb::encode(c.r, encode);
+        image.pixels[i * 4 + 1] = srgb::encode(c.g, encode);
+        image.pixels[i * 4 + 2] = srgb::encode(c.b, encode);
         image.pixels[i * 4 + 3] = static_cast<std::uint8_t>(std::clamp(c.a, 0.f, 1.f) * 255.f + 0.5f);
     }
     return image;
