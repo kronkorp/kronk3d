@@ -1,19 +1,11 @@
 #include <SFML/Graphics.hpp>
-#include "Color.hpp"
-#include "Matrix.hpp"
-#include "Rasterizer.hpp"
-#include "io/ObjLoader.hpp"
-#include "scene/Model.hpp"
-#include "utils/Viewport.hpp"
+#include "Kronk3d.hpp"
 #include <algorithm>
 #include <chrono>
-#include <cstdint>
 #include <filesystem>
 #include <format>
 #include <iostream>
 #include <memory>
-#include <numbers>
-#include <vector>
 #include "cube/Cube.hpp"
 #include "cube/CubeTextured.hpp"
 
@@ -21,18 +13,55 @@
     #define K3_EXAMPLE_ASSETS_DIR "example/assets"
 #endif
 
-static void toRGBA8(const std::vector<k3::Math::Color>& pixels, std::vector<std::uint8_t>& out)
+namespace
 {
-    out.resize(pixels.size() * 4);
 
-    for (std::size_t i = 0; i < pixels.size(); ++i) {
-        const k3::Math::Color& color = pixels[i];
+    constexpr float MOVE_SPEED = 3.f;          // Units per second
+    constexpr float TURN_SPEED = 1.5f;         // Radians per second (arrow keys)
+    constexpr float MOUSE_SENSITIVITY = 0.004f; // Radians per pixel
+    constexpr float MAX_PITCH = 1.55f;
 
-        out[i * 4 + 0] = static_cast<std::uint8_t>(std::clamp(color.r, 0.f, 1.f) * 255.f);
-        out[i * 4 + 1] = static_cast<std::uint8_t>(std::clamp(color.g, 0.f, 1.f) * 255.f);
-        out[i * 4 + 2] = static_cast<std::uint8_t>(std::clamp(color.b, 0.f, 1.f) * 255.f);
-        out[i * 4 + 3] = 255;
+    bool pressed(sf::Keyboard::Key key)
+    {
+        return sf::Keyboard::isKeyPressed(key);
     }
+
+    // ZQSD / WASD to move, Space / Shift for height, arrows or right mouse drag to look around.
+    void updateCamera(k3::Camera& camera, float dt, const sf::Vector2i& mouseDelta, bool mouseLook)
+    {
+        k3::Math::Vector3f move{};
+        const auto forward = camera.forward();
+        const auto right = camera.right();
+
+        if (pressed(sf::Keyboard::W) || pressed(sf::Keyboard::Z))
+            move += forward;
+        if (pressed(sf::Keyboard::S))
+            move += -forward;
+        if (pressed(sf::Keyboard::D))
+            move += right;
+        if (pressed(sf::Keyboard::A) || pressed(sf::Keyboard::Q))
+            move += -right;
+        if (pressed(sf::Keyboard::Space))
+            move += {0.f, 1.f, 0.f};
+        if (pressed(sf::Keyboard::LShift))
+            move += {0.f, -1.f, 0.f};
+        camera.position += k3::Math::Vector3f::normalize(move) * (MOVE_SPEED * dt);
+
+        if (pressed(sf::Keyboard::Left))
+            camera.yaw -= TURN_SPEED * dt;
+        if (pressed(sf::Keyboard::Right))
+            camera.yaw += TURN_SPEED * dt;
+        if (pressed(sf::Keyboard::Up))
+            camera.pitch += TURN_SPEED * dt;
+        if (pressed(sf::Keyboard::Down))
+            camera.pitch -= TURN_SPEED * dt;
+        if (mouseLook) {
+            camera.yaw += mouseDelta.x * MOUSE_SENSITIVITY;
+            camera.pitch -= mouseDelta.y * MOUSE_SENSITIVITY;
+        }
+        camera.pitch = std::clamp(camera.pitch, -MAX_PITCH, MAX_PITCH);
+    }
+
 }
 
 int main(void)
@@ -55,35 +84,39 @@ int main(void)
     const k3::Model* scenes[] = {&texturedCube, &coloredCube, &*spot};
     std::size_t currentScene = 2;
 
-    k3::Rasterizer engine(WIDTH, HEIGHT);
+    auto created = k3::createRasterizer(k3::Backend::Software, {.width = WIDTH, .height = HEIGHT});
+    if (!created) {
+        std::cerr << "Cannot create the rasterizer: " << created.error() << std::endl;
+        return 1;
+    }
+    std::unique_ptr<k3::IRasterizer> rasterizer = std::move(*created);
 
     sf::RenderWindow window(sf::VideoMode(WIDTH, HEIGHT), "kronk3d");
     sf::Texture texture;
     sf::Sprite sprite;
-    std::vector<std::uint8_t> rgba;
 
     texture.create(WIDTH, HEIGHT);
     sprite.setTexture(texture, true);
 
-    k3::Viewport viewport{
-        0,
-        WIDTH,
-        0,
-        HEIGHT
-    };
+    k3::Camera camera;
+    camera.position = {0.f, 0.5f, 4.f};
+    camera.lookAt({0.f, 0.f, 0.f});
+
+    k3::Environment environment;
+    environment.clearColor = k3::Math::Color::fromSRGB(22, 22, 26);
+    environment.ambient = {0.15f, 0.15f, 0.18f, 1.f};
+    environment.lights.push_back(k3::Light::directional({-0.5f, -1.f, -0.6f}, {1.f, 0.95f, 0.9f, 1.f}, 2.f));
 
     using Clock = std::chrono::steady_clock;
 
-    static constexpr float ROTATION_SPEED_RAD_PER_SEC = 1.f;
-    static constexpr float CAMERA_SPEED_UNITS_PER_SEC = 3.f;
+    static constexpr float ROTATION_SPEED_RAD_PER_SEC = 0.5f;
 
     std::size_t frameCount = 0;
-    double drawTimeAccumulatedMs = 0.0;
+    double frameTimeAccumulatedMs = 0.0;
     auto statsTimer = Clock::now();
     auto lastFrameTime = Clock::now();
     const auto appStart = Clock::now();
-
-    k3::Math::Vector3f cameraPosition{0.f, 0.f, 5.f};
+    sf::Vector2i lastMouse = sf::Mouse::getPosition(window);
 
     while (window.isOpen()) {
         sf::Event event;
@@ -98,42 +131,28 @@ int main(void)
         const float deltaTime = std::chrono::duration<float>(frameNow - lastFrameTime).count();
         lastFrameTime = frameNow;
 
-        // Camera displacement (world space, no rotation yet): ZQSD/WASD on the XZ plane, Space/Shift for height
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::W) || sf::Keyboard::isKeyPressed(sf::Keyboard::Z))
-            cameraPosition.z -= CAMERA_SPEED_UNITS_PER_SEC * deltaTime;
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::S))
-            cameraPosition.z += CAMERA_SPEED_UNITS_PER_SEC * deltaTime;
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::A) || sf::Keyboard::isKeyPressed(sf::Keyboard::Q))
-            cameraPosition.x -= CAMERA_SPEED_UNITS_PER_SEC * deltaTime;
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::D))
-            cameraPosition.x += CAMERA_SPEED_UNITS_PER_SEC * deltaTime;
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::Space))
-            cameraPosition.y += CAMERA_SPEED_UNITS_PER_SEC * deltaTime;
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::LShift))
-            cameraPosition.y -= CAMERA_SPEED_UNITS_PER_SEC * deltaTime;
-
-        engine.clear(k3::Math::Color::fromRGB(22, 22, 22));
+        const sf::Vector2i mouse = sf::Mouse::getPosition(window);
+        const bool mouseLook = window.hasFocus() && sf::Mouse::isButtonPressed(sf::Mouse::Right);
+        if (window.hasFocus())
+            updateCamera(camera, deltaTime, mouse - lastMouse, mouseLook);
+        lastMouse = mouse;
 
         const float elapsedSinceStart = std::chrono::duration<float>(Clock::now() - appStart).count();
         const float rotationAngle = elapsedSinceStart * ROTATION_SPEED_RAD_PER_SEC;
 
-        // View = inverse of the camera's world transform, shared by every mesh in the scene.
-        const auto view = k3::Math::Matrix4::translate({-cameraPosition.x, -cameraPosition.y, -cameraPosition.z});
-        // Model = this mesh's own placement/animation in world space, centered and scaled to fit a 2-unit cube.
-        const auto bounds = scenes[currentScene]->bounds();
-        const auto fit = k3::Math::Matrix4::scale(1.5f / bounds.radius())
-            * k3::Math::Matrix4::translate(-bounds.center());
-        const auto model = k3::Math::Matrix4::rotateZX(rotationAngle) * k3::Math::Matrix4::rotateYZ(rotationAngle * 0.5f) * fit;
-        const auto projection = k3::Math::Matrix4::perspective(0.01f, 100.f, std::numbers::pi_v<float> / 3.f, static_cast<float>(WIDTH) / HEIGHT);
+        // Center the model on the origin and scale it to a ~3 unit wide box, then spin it.
+        const k3::Model& model = *scenes[currentScene];
+        const auto bounds = model.bounds();
+        const auto fit = k3::Math::Matrix4::scale(1.5f / bounds.radius()) * k3::Math::Matrix4::translate(-bounds.center());
+        const auto transform = k3::Math::Matrix4::rotateZX(rotationAngle) * fit;
 
-        const auto drawStart = Clock::now();
-        engine.draw(*scenes[currentScene], viewport, projection * view * model);
+        rasterizer->beginFrame(camera, environment);
+        rasterizer->draw(model, transform);
+        rasterizer->endFrame();
+        frameTimeAccumulatedMs += rasterizer->stats().frameMs;
 
-        const auto drawEnd = Clock::now();
-        drawTimeAccumulatedMs += std::chrono::duration<double, std::milli>(drawEnd - drawStart).count();
-
-        toRGBA8(engine.framebuffer(), rgba);
-        texture.update(rgba.data());
+        const k3::Image image = rasterizer->readPixels();
+        texture.update(image.pixels.data());
 
         window.clear(sf::Color::Black);
         window.draw(sprite);
@@ -145,12 +164,15 @@ int main(void)
         if (statsElapsed >= std::chrono::seconds(1)) {
             const double elapsedSeconds = std::chrono::duration<double>(statsElapsed).count();
             const double fps = frameCount / elapsedSeconds;
-            const double avgDrawMs = drawTimeAccumulatedMs / frameCount;
+            const double avgFrameMs = frameTimeAccumulatedMs / frameCount;
 
-            window.setTitle(std::format("kronk3d — {} — FPS: {:.1f} | draw: {:.3f} ms [1-3: scene]", scenes[currentScene]->name, fps, avgDrawMs));
+            window.setTitle(std::format(
+                "kronk3d [{}] — {} — FPS: {:.1f} | render: {:.2f} ms | {} triangles [1-3: scene]",
+                rasterizer->name(), model.name, fps, avgFrameMs, rasterizer->stats().triangles
+            ));
 
             frameCount = 0;
-            drawTimeAccumulatedMs = 0.0;
+            frameTimeAccumulatedMs = 0.0;
             statsTimer = now;
         }
     }
