@@ -22,8 +22,8 @@ namespace k3::sw
         Math::Vector3f position;
         Math::Vector3f normal;          // Not normalized
         Math::Vector2f uv;
+        Math::Vector2f duvdx, duvdy;    // Screen-space derivatives of uv (mip level selection)
         Math::Color    color;           // Vertex color
-        float          lod;             // Texture mip level
         bool           frontFacing;
     };
 

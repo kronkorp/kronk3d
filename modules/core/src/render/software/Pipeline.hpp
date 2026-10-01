@@ -56,6 +56,9 @@ namespace k3::sw
         float         z[3];                         // Depth in [0, 1]
         float         invW[3];                      // 1 / clip w, for perspective-correct interpolation
         float         varyings[3][VARYING_COUNT];
+        // Per-pixel steps (along x, then y) of q = sum(E_i / w_i), q * u and q * v. Since u = (q * u) / q,
+        // they give exact screen-space uv derivatives, which select the texture mip levels.
+        float         qStep[2], uStep[2], vStep[2];
         std::int32_t  minX, minY, maxX, maxY;       // Pixel bounds, clamped to the target
         std::uint32_t draw;
         bool          frontFacing;
