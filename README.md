@@ -133,6 +133,18 @@ bumps its version); to change a mesh, replace it with a new one.
 | `ZQSD` / `WASD`, `Space`, `Shift` | Move |
 | Arrow keys, right mouse drag | Look around |
 
+## Benchmark
+
+`kronk3d_bench <scene.obj> [--size WxH] [--frames N] [--threads N] [--no-shadows] [--screenshot prefix]`
+renders an OBJ scene with each backend (OpenGL when a context can be created) and reports load and
+frame times. `tools/bench/download_sponza.sh` fetches Crytek Sponza (262k triangles, 54 textures):
+
+| Sponza, 1280x720, sun shadows (2048²) + point light | Ryzen 7 7745HX (16 threads) / Radeon 610M |
+|---|---|
+| Load (OBJ + MTL + textures + mipmaps) | 0.26 s |
+| Software | 32 ms / frame |
+| OpenGL | 7 ms / frame |
+
 ## Conventions
 
 - **Coordinates**: right-handed, y up; the camera looks toward -Z. Front faces are counter-clockwise (as in OpenGL and OBJ).
@@ -154,7 +166,9 @@ modules/
       software/  SoftwareRasterizer: pipeline, clipper, sampling, shading, thread pool
       opengl/    HardwareRasterizer, ImagePresenter, GL loader, shaders
   test/
-    src/  CPU unit tests
-    gl/   OpenGL tests (including a pixel comparison with the software backend)
-example/  Interactive demo (SFML window)
+    src/      CPU unit tests
+    gl/       OpenGL tests (including a pixel comparison with the software backend)
+    package/  Consumer of the installed CMake package (CI)
+example/      Interactive demo (SFML window)
+tools/bench/  Benchmark (+ Sponza download script)
 ```
