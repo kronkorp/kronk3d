@@ -1,4 +1,5 @@
 #include "Test.hpp"
+#include "render/ShadowFit.hpp"
 #include "render/software/SoftwareRasterizer.hpp"
 #include <cmath>
 
@@ -112,4 +113,106 @@ K3_TEST(shadow_lit_surfaces_have_no_acne)
     const float expected = 1.f / std::sqrt(10.f);
     for (float value : renderMiddleRow(environment, nullptr))
         K3_REQUIRE(std::abs(value - expected) < 1e-4f);
+}
+
+namespace
+{
+
+    // Large flat scene seen from a person's height: what cascades are for.
+    struct CascadeSetup
+    {
+        k3::Camera camera;
+        k3::Math::Bounds3f scene;
+        k3::ShadowSettings settings;
+        k3::Math::Vector3f light = k3::Math::Vector3f::normalize({-0.4f, -1.f, -0.3f});
+
+        CascadeSetup()
+        {
+            camera.position = {0.f, 2.f, 40.f};
+            camera.lookAt({0.f, 0.f, 0.f});
+            camera.nearPlane = 0.1f;
+            camera.farPlane = 500.f;
+            scene.expand({-50.f, 0.f, -50.f});
+            scene.expand({50.f, 10.f, 50.f});
+        }
+
+        std::vector<k3::ShadowCascade> fit() const
+        {
+            return k3::fitShadowCascades(settings, camera, 16.f / 9.f, scene, light);
+        }
+    };
+
+    k3::Math::Vector3f ndc(const k3::Math::Matrix4& m, const k3::Math::Vector3f& p)
+    {
+        const auto clip = m * p.asPoint();
+        return {clip.x / clip.w, clip.y / clip.w, clip.z / clip.w};
+    }
+
+}
+
+K3_TEST(shadow_cascades_split_the_view_range)
+{
+    CascadeSetup setup;
+    const auto cascades = setup.fit();
+
+    K3_REQUIRE(cascades.size() == 3);
+    K3_CHECK(cascades[0].splitDistance < cascades[1].splitDistance);
+    K3_CHECK(cascades[2].splitDistance > 1e30f);           // The last one takes everything beyond
+    K3_CHECK(cascades[0].texelSize < cascades[1].texelSize && cascades[1].texelSize < cascades[2].texelSize);
+
+    setup.settings.cascades = 1;
+    K3_CHECK(setup.fit().size() == 1);
+    setup.settings.cascades = 3;
+    setup.settings.bounds = setup.scene;
+    K3_CHECK(setup.fit().size() == 1);
+}
+
+K3_TEST(shadow_cascade_covers_its_view_slice_and_every_caster)
+{
+    CascadeSetup setup;
+    const auto cascades = setup.fit();
+    const auto& camera = setup.camera;
+    const float tanHalf = std::tan(camera.fovY * 0.5f), aspect = 16.f / 9.f;
+
+    float sliceStart = camera.nearPlane;
+    for (std::size_t c = 0; c + 1 < cascades.size(); ++c) {
+        // Corners of the view slice project inside the map.
+        for (float distance : {sliceStart, cascades[c].splitDistance}) {
+            for (int corner = 0; corner < 4; ++corner) {
+                const float h = distance * tanHalf, w = h * aspect;
+                const auto p = camera.position + camera.forward() * distance
+                    + camera.up() * ((corner & 1) ? h : -h) + camera.right() * ((corner & 2) ? w : -w);
+                const auto q = ndc(cascades[c].viewProjection, p);
+                K3_CHECK(std::abs(q.x) <= 1.f && std::abs(q.y) <= 1.f);
+            }
+        }
+        sliceStart = cascades[c].splitDistance;
+    }
+
+    // Every corner of the scene lies within each cascade's depth range: nothing gets clipped away.
+    for (const auto& cascade : cascades) {
+        for (int i = 0; i < 8; ++i) {
+            const k3::Math::Vector3f corner{(i & 1) ? setup.scene.max.x : setup.scene.min.x, (i & 2) ? setup.scene.max.y : setup.scene.min.y, (i & 4) ? setup.scene.max.z : setup.scene.min.z};
+            const float z = ndc(cascade.viewProjection, corner).z;
+            K3_CHECK(z >= -1.f && z <= 1.f);
+        }
+    }
+}
+
+K3_TEST(shadow_cascades_move_by_whole_texels)
+{
+    // A small camera move must shift each map by a whole number of texels, or shadows shimmer.
+    CascadeSetup setup;
+    const auto before = setup.fit();
+    setup.camera.position += {0.0137f, 0.f, -0.0291f};
+    const auto after = setup.fit();
+    const k3::Math::Vector3f point{3.f, 0.f, 5.f};
+
+    for (std::size_t c = 0; c < before.size(); ++c) {
+        const float texels = static_cast<float>(setup.settings.resolution) * 0.5f;
+        const auto a = ndc(before[c].viewProjection, point), b = ndc(after[c].viewProjection, point);
+        const float dx = (a.x - b.x) * texels, dy = (a.y - b.y) * texels;
+        K3_CHECK_NEAR(dx, std::round(dx), 0.01f);
+        K3_CHECK_NEAR(dy, std::round(dy), 0.01f);
+    }
 }

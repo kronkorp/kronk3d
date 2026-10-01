@@ -1,6 +1,7 @@
 // Renders an OBJ scene with each backend and reports load and frame times.
 //
-//     kronk3d_bench <scene.obj> [--size WxH] [--frames N] [--threads N] [--no-shadows] [--aa none|fxaa|ssaa] [--screenshot prefix]
+//     kronk3d_bench <scene.obj> [--size WxH] [--frames N] [--threads N] [--no-shadows] [--cascades N]
+//                   [--shadow-resolution N] [--aa none|fxaa|ssaa] [--screenshot prefix]
 //
 // The camera stands inside the scene's bounds, near the floor, looking along its longest horizontal axis
 // (a good default for architectural scenes such as Sponza).
@@ -30,6 +31,7 @@ namespace
         bool          shadows = true;
         std::string   screenshot;
         k3::AntiAliasing antiAliasing = k3::AntiAliasing::None;
+        k3::ShadowSettings shadowSettings{};
     };
 
     bool parse(int argc, char** argv, Options& options)
@@ -47,6 +49,10 @@ namespace
                 options.threads = static_cast<unsigned>(std::atoi(argv[++i]));
             } else if (arg == "--no-shadows") {
                 options.shadows = false;
+            } else if (arg == "--cascades" && hasValue) {
+                options.shadowSettings.cascades = std::atoi(argv[++i]);
+            } else if (arg == "--shadow-resolution" && hasValue) {
+                options.shadowSettings.resolution = static_cast<std::uint32_t>(std::atoi(argv[++i]));
             } else if (arg == "--screenshot" && hasValue) {
                 options.screenshot = argv[++i];
             } else if (arg == "--aa" && hasValue) {
@@ -102,7 +108,7 @@ int main(int argc, char** argv)
 {
     Options options;
     if (!parse(argc, argv, options)) {
-        std::cerr << "usage: " << argv[0] << " <scene.obj> [--size WxH] [--frames N] [--threads N] [--no-shadows] [--aa none|fxaa|ssaa] [--screenshot prefix]" << std::endl;
+        std::cerr << "usage: " << argv[0] << " <scene.obj> [--size WxH] [--frames N] [--threads N] [--no-shadows] [--cascades N] [--shadow-resolution N] [--aa none|fxaa|ssaa] [--screenshot prefix]" << std::endl;
         return 2;
     }
 
@@ -124,6 +130,7 @@ int main(int argc, char** argv)
     camera.farPlane = bounds.radius() * 3.f;
 
     k3::Environment environment;
+    environment.shadows = options.shadowSettings;
     environment.ambient = {0.15f, 0.15f, 0.17f, 1.f};
     environment.lights.push_back(k3::Light::directional({-0.3f, -1.f, -0.2f}, {1.f, 0.95f, 0.85f, 1.f}, 2.f));
     environment.lights.back().castShadows = options.shadows;

@@ -20,7 +20,7 @@ Both backends produce the same image: the shading code is mirrored, and tests co
   - Per-pixel Blinn-Phong, computed in linear space with sRGB output.
   - Normal mapping (tangent space, OpenGL convention), with tangents computed from the uvs.
   - Ambient, directional, point and spot lights (up to 8).
-  - Shadow maps for a directional light, with PCF soft edges and the alpha test applied to casters.
+  - Cascaded shadow maps for a directional light (stable when the camera moves or turns), with PCF soft edges and the alpha test applied to casters.
 - **Textures**
   - Mipmaps built in linear space for sRGB textures.
   - Nearest / bilinear / trilinear filtering; repeat, mirrored and clamp wrap modes, with OpenGL sampler semantics.
@@ -138,15 +138,18 @@ bumps its version); to change a mesh, replace it with a new one.
 
 ## Benchmark
 
-`kronk3d_bench <scene.obj> [--size WxH] [--frames N] [--threads N] [--no-shadows] [--aa none|fxaa|ssaa] [--screenshot prefix]`
+`kronk3d_bench <scene.obj> [--size WxH] [--frames N] [--threads N] [--no-shadows] [--cascades N] [--shadow-resolution N] [--aa none|fxaa|ssaa] [--screenshot prefix]`
 renders an OBJ scene with each backend (OpenGL when a context can be created) and reports load and
 frame times. `tools/bench/download_sponza.sh` fetches Crytek Sponza (262k triangles, 54 textures):
 
-| Sponza, 1280x720, sun shadows (2048²) + point light | Ryzen 7 7745HX (16 threads) / Radeon 610M |
+| Sponza, 1280x720, sun shadows (3 cascades of 1024²) + point light, normal maps | Ryzen 7 7745HX (16 threads) / Radeon 610M |
 |---|---|
-| Load (OBJ + MTL + textures + mipmaps) | 0.26 s |
-| Software | 32 ms / frame |
-| OpenGL | 7 ms / frame |
+| Load (OBJ + MTL + textures + mipmaps) | 0.3 s |
+| Software | 48 ms / frame |
+| OpenGL | 9 ms / frame |
+
+Shadows are the main lever on the software backend: each cascade costs a pass over the shadow
+casters (`ShadowSettings::cascades`, `resolution`).
 
 ## Conventions
 

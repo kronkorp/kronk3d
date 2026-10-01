@@ -219,7 +219,8 @@ struct k3::SoftwareRasterizer::Impl
     std::vector<Math::Color>          color;            // Render resolution (twice the output's with SSAA)
     std::vector<float>                depth;
     std::vector<const sw::Triangle*>  visibility;       // Nearest opaque triangle of each pixel
-    std::vector<float>                shadowDepth;
+    std::vector<std::vector<float>>   shadowDepths;     // One per cascade
+    std::vector<float>*               shadowTarget = nullptr;   // Cascade being rendered
 
     Camera             camera{};
     Environment        environment{};
@@ -607,37 +608,45 @@ struct k3::SoftwareRasterizer::Impl
     {
         const ShadowSettings& settings = environment.shadows;
 
-        shading.shadow = {};
+        shading.shadow = sw::ShadowMap{};
         if (shading.shadowLight < 0 || settings.resolution == 0)
             return;
 
-        Math::Bounds3f bounds = settings.bounds;
-        if (bounds.empty())
-            for (const DrawCommand& command : commands)
-                bounds.merge(command.bounds);
+        Math::Bounds3f sceneBounds;
+        for (const DrawCommand& command : commands)
+            sceneBounds.merge(command.bounds);
 
-        const auto projection = fitShadowProjection(bounds, shading.lights[shading.shadowLight].direction);
-        if (!projection)
-            return;
-
-        shadowPass.viewProjection = projection->viewProjection;
-        shadowPass.setSize(settings.resolution, settings.resolution);
-        shadowDepth.resize(static_cast<std::size_t>(settings.resolution) * settings.resolution);
+        const float aspect = outputHeight ? static_cast<float>(outputWidth) / outputHeight : 1.f;
+        const auto cascades = fitShadowCascades(settings, camera, aspect, sceneBounds, shading.lights[shading.shadowLight].direction);
 
         planShadowPass(firstBlended);
-        if (shadowPass.geometryJobs.empty())
+        if (cascades.empty() || shadowPass.geometryJobs.empty())
             return;
-        runGeometry(shadowPass);
-        pool.parallelFor(shadowPass.tileCount(), [&](std::size_t tile) { renderShadowTile(tile); });
 
-        shading.shadow = {
-            shadowDepth.data(),
-            settings.resolution,
-            shadowPass.viewProjection,
-            settings.depthBias,
-            settings.normalBias * 2.f * projection->radius / static_cast<float>(settings.resolution),
-            std::max(settings.pcfRadius, 0),
-        };
+        sw::ShadowMap& shadow = shading.shadow;
+        shadowPass.setSize(settings.resolution, settings.resolution);
+        shadowDepths.resize(cascades.size());
+
+        for (std::size_t i = 0; i < cascades.size(); ++i) {
+            shadowDepths[i].resize(static_cast<std::size_t>(settings.resolution) * settings.resolution);
+            shadowTarget = &shadowDepths[i];
+            shadowPass.viewProjection = cascades[i].viewProjection;
+            runGeometry(shadowPass);
+            pool.parallelFor(shadowPass.tileCount(), [&](std::size_t tile) { renderShadowTile(tile); });
+
+            shadow.cascades[i] = {
+                shadowDepths[i].data(),
+                cascades[i].viewProjection,
+                settings.normalBias * cascades[i].texelSize,
+                cascades[i].splitDistance,
+            };
+        }
+        shadow.count = cascades.size();
+        shadow.size = settings.resolution;
+        shadow.depthBias = settings.depthBias;
+        shadow.pcfRadius = std::max(settings.pcfRadius, 0);
+        shadow.cameraPosition = camera.position;
+        shadow.cameraForward = camera.forward();
     }
 
     void renderShadowTile(std::size_t tile)
@@ -648,7 +657,7 @@ struct k3::SoftwareRasterizer::Impl
         const std::uint32_t size = shadowPass.width;
         for (std::int32_t y = y0; y <= y1; ++y) {
             const std::size_t row = static_cast<std::size_t>(y) * size;
-            std::fill(shadowDepth.begin() + row + x0, shadowDepth.begin() + row + x1 + 1, 1.f);
+            std::fill(shadowTarget->begin() + row + x0, shadowTarget->begin() + row + x1 + 1, 1.f);
         }
 
         for (const sw::Triangle* triangle : shadowPass.bins[tile].opaque) {
@@ -656,7 +665,7 @@ struct k3::SoftwareRasterizer::Impl
             const sw::DrawState& state = drawStates[t.draw];
 
             forEachCoveredPixel(t, x0, y0, x1, y1, [&](std::int32_t x, std::int32_t y, const std::int64_t e[3]) {
-                float& stored = shadowDepth[static_cast<std::size_t>(y) * size + x];
+                float& stored = (*shadowTarget)[static_cast<std::size_t>(y) * size + x];
                 const float z = depthAt(t, e);
 
                 if (!(z < stored))
@@ -888,7 +897,7 @@ void k3::SoftwareRasterizer::endFrame()
     // Draw states point into the recorded materials: drop both together.
     impl.drawStates.clear();
     impl.commands.clear();
-    impl.shading.shadow = {};
+    impl.shading.shadow = sw::ShadowMap{};
     impl.collectBounds();
     impl.stats.frameMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
