@@ -3,6 +3,7 @@
 #include "Pipeline.hpp"
 #include "Shading.hpp"
 #include "ThreadPool.hpp"
+#include "render/ShadowFit.hpp"
 #include "utils/Srgb.hpp"
 #include <algorithm>
 #include <chrono>
@@ -120,6 +121,13 @@ namespace
             y1 = std::min<std::int32_t>(y0 + TILE_SIZE, height) - 1;
         }
     };
+
+    // The color buffer behaves like an 8-bit (UNORM) render target: what is written, or blended, is
+    // clamped to [0, 1] first. GPU backends do exactly that, so overbright surfaces composite the same.
+    k3::Math::Color saturate(const k3::Math::Color& c)
+    {
+        return {std::clamp(c.r, 0.f, 1.f), std::clamp(c.g, 0.f, 1.f), std::clamp(c.b, 0.f, 1.f), std::clamp(c.a, 0.f, 1.f)};
+    }
 
     // Calls fn(x, y, edges) for every pixel of `t` inside the [x0, x1] x [y0, y1] rectangle.
     template<typename Fn>
@@ -464,18 +472,12 @@ struct k3::SoftwareRasterizer::Impl
         if (bounds.empty())
             for (const DrawCommand& command : commands)
                 bounds.merge(command.bounds);
-        if (bounds.empty())
+
+        const auto projection = fitShadowProjection(bounds, shading.lights[shading.shadowLight].direction);
+        if (!projection)
             return;
 
-        // Orthographic box around the bounds' sphere, looking along the light.
-        const Math::Vector3f direction = shading.lights[shading.shadowLight].direction;
-        const Math::Vector3f center = bounds.center();
-        const float radius = std::max(bounds.radius(), 1e-3f);
-        const Math::Vector3f up = std::abs(direction.y) > 0.99f ? Math::Vector3f{0.f, 0.f, 1.f} : Math::Vector3f{0.f, 1.f, 0.f};
-        const Math::Matrix4 lightView = Math::Matrix4::lookAt(center - direction * radius, center, up);
-        const Math::Matrix4 lightProjection = Math::Matrix4::orthographic(-radius, radius, -radius, radius, 0.f, 2.f * radius);
-
-        shadowPass.viewProjection = lightProjection * lightView;
+        shadowPass.viewProjection = projection->viewProjection;
         shadowPass.setSize(settings.resolution, settings.resolution);
         shadowDepth.resize(static_cast<std::size_t>(settings.resolution) * settings.resolution);
 
@@ -490,7 +492,7 @@ struct k3::SoftwareRasterizer::Impl
             settings.resolution,
             shadowPass.viewProjection,
             settings.depthBias,
-            settings.normalBias * 2.f * radius / static_cast<float>(settings.resolution),
+            settings.normalBias * 2.f * projection->radius / static_cast<float>(settings.resolution),
             std::max(settings.pcfRadius, 0),
         };
     }
@@ -609,7 +611,7 @@ struct k3::SoftwareRasterizer::Impl
                 std::int64_t e[3];
                 t->edgesAt(x, y, e);
 
-                Math::Color c = sw::shade(shading, *drawStates[t->draw].material, fragmentAt(*t, e));
+                Math::Color c = saturate(sw::shade(shading, *drawStates[t->draw].material, fragmentAt(*t, e)));
                 c.a = 1.f;
                 color[index] = c;
             }
@@ -626,8 +628,8 @@ struct k3::SoftwareRasterizer::Impl
                 if (!(depthAt(t, e) < depth[index]))
                     return;
 
-                const Math::Color src = sw::shade(shading, material, fragmentAt(t, e));
-                const float a = std::clamp(src.a, 0.f, 1.f);
+                const Math::Color src = saturate(sw::shade(shading, material, fragmentAt(t, e)));
+                const float a = src.a;
                 Math::Color& dst = color[index];
 
                 dst.r = src.r * a + dst.r * (1.f - a);
