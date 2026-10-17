@@ -1,4 +1,5 @@
 add_library(KRONK3D_OPTIONS INTERFACE)
+set_target_properties(KRONK3D_OPTIONS PROPERTIES EXPORT_NAME options)
 
 target_compile_options(KRONK3D_OPTIONS INTERFACE
     ${PROJECT_WARNINGS}

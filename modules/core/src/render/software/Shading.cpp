@@ -14,12 +14,44 @@ namespace
         return t * t * (3.f - 2.f * t);
     }
 
+    // The optical depth is density * distance * (1 - e^-x) / x, with x the fog's falloff times the height
+    // difference to the surface; the limit at x = 0 is 1. Exponents are clamped so nothing overflows.
+    constexpr float FOG_EXPONENT_LIMIT = 80.f;
+
     // Inverse-square falloff, windowed so the light reaches exactly 0 at its range.
     float distanceAttenuation(float distance, float range) noexcept
     {
         const float ratio = distance / range;
         const float window = std::clamp(1.f - ratio * ratio * ratio * ratio, 0.f, 1.f);
         return window * window / (distance * distance + 1.f);
+    }
+
+}
+
+float k3::sw::fogVisibility(const FogState& fog, const Math::Vector3f& cameraPosition, const Math::Vector3f& position) noexcept
+{
+    const Vector3f ray = position - cameraPosition;
+    const float x = std::clamp(fog.falloff * ray.y, -FOG_EXPONENT_LIMIT, FOG_EXPONENT_LIMIT);
+    const float mean = std::abs(x) < 1e-3f ? 1.f - 0.5f * x : (1.f - std::exp(-x)) / x;
+
+    return std::exp(-fog.density * Vector3f::length(ray) * mean);
+}
+
+namespace
+{
+
+    // Moves the color of a surface toward the fog color.
+    k3::Math::Color fogged(const k3::sw::ShadingContext& context, const Vector3f& position, k3::Math::Color color) noexcept
+    {
+        if (!context.fog.enabled)
+            return color;
+
+        const float visibility = k3::sw::fogVisibility(context.fog, context.cameraPosition, position);
+
+        color.r = context.fog.color.r + (color.r - context.fog.color.r) * visibility;
+        color.g = context.fog.color.g + (color.g - context.fog.color.g) * visibility;
+        color.b = context.fog.color.b + (color.b - context.fog.color.b) * visibility;
+        return color;
     }
 
 }
@@ -32,6 +64,18 @@ k3::sw::ShadingContext k3::sw::ShadingContext::prepare(const Camera& camera, con
     context.viewDirection = -camera.forward();
     context.orthographic = camera.projection == Projection::Orthographic;
     context.ambient = environment.ambient;
+    context.hemisphere = environment.ambientGround.has_value();
+    context.ambientGround = environment.ambientGround.value_or(environment.ambient);
+
+    const Fog& fog = environment.fog;
+    if (fog.density > 0.f) {
+        const float falloff = std::max(fog.heightFalloff, 0.f);
+
+        context.fog.enabled = true;
+        context.fog.color = fog.color;
+        context.fog.falloff = falloff;
+        context.fog.density = fog.density * std::exp(std::clamp(-falloff * (camera.position.y - fog.baseHeight), -FOG_EXPONENT_LIMIT, FOG_EXPONENT_LIMIT));
+    }
     for (const Light& light : environment.lights) {
         if (context.lightCount == MAX_LIGHTS)
             break;
@@ -55,11 +99,17 @@ k3::sw::ShadingContext k3::sw::ShadingContext::prepare(const Camera& camera, con
 
 float k3::sw::shadowVisibility(const ShadowMap& shadow, const Math::Vector3f& position, const Math::Vector3f& normal) noexcept
 {
-    if (!shadow.depth || shadow.size == 0)
+    if (shadow.count == 0 || shadow.size == 0)
         return 1.f;
 
+    const float distance = Vector3f::dot(position - shadow.cameraPosition, shadow.cameraForward);
+    std::size_t index = 0;
+    while (index + 1 < shadow.count && distance > shadow.cascades[index].splitDistance)
+        ++index;
+    const ShadowMap::Cascade& cascade = shadow.cascades[index];
+
     // The light's projection is orthographic: w = 1, no divide needed.
-    const Math::Vector4f clip = shadow.viewProjection * (position + normal * shadow.normalOffset).asPoint();
+    const Math::Vector4f clip = cascade.viewProjection * (position + normal * cascade.normalOffset).asPoint();
     const float u = clip.x * 0.5f + 0.5f;
     const float v = 0.5f - clip.y * 0.5f;
     const float depth = clip.z * 0.5f + 0.5f - shadow.depthBias;
@@ -79,7 +129,7 @@ float k3::sw::shadowVisibility(const ShadowMap& shadow, const Math::Vector3f& po
         for (int dx = -shadow.pcfRadius; dx <= shadow.pcfRadius; ++dx) {
             const int x = std::clamp(cx + dx, 0, size - 1);
 
-            lit += depth <= shadow.depth[static_cast<std::size_t>(y) * shadow.size + x];
+            lit += depth <= cascade.depth[static_cast<std::size_t>(y) * shadow.size + x];
             ++taps;
         }
     }
@@ -104,12 +154,25 @@ k3::Math::Color k3::sw::shade(const ShadingContext& context, const Material& mat
     if (material.opacityMap)
         albedo.a *= sampleTexture(material.opacityMap.get(), fragment.uv, fragment.duvdx, fragment.duvdy).r;
     if (material.unlit)
-        return albedo;
+        return fogged(context, fragment.position, albedo);
 
     // Back faces (only drawn for double-sided materials) are lit as seen from behind.
     Vector3f n = Vector3f::normalize(fragment.normal);
     if (!fragment.frontFacing)
         n = -n;
+
+    if (material.normalMap && fragment.tangent.w != 0.f) {
+        // Tangent frame re-orthogonalized after interpolation; the map's x/y/z go along t/b/n.
+        const Vector3f tangent{fragment.tangent.x, fragment.tangent.y, fragment.tangent.z};
+        const Vector3f t = Vector3f::normalize(tangent - n * Vector3f::dot(n, tangent));
+        const Vector3f b = Vector3f::cross(n, t) * (fragment.tangent.w < 0.f ? -1.f : 1.f);
+        const Math::Color texel = sampleTexture(material.normalMap.get(), fragment.uv, fragment.duvdx, fragment.duvdy);
+        const float x = (texel.r * 2.f - 1.f) * material.normalScale;
+        const float y = (texel.g * 2.f - 1.f) * material.normalScale;
+        const float z = texel.b * 2.f - 1.f;
+
+        n = Vector3f::normalize(t * x + b * y + n * z);
+    }
 
     const Vector3f v = context.orthographic ? context.viewDirection : Vector3f::normalize(context.cameraPosition - fragment.position);
     Math::Color specular = material.specular;
@@ -118,7 +181,14 @@ k3::Math::Color k3::sw::shade(const ShadingContext& context, const Material& mat
     const bool hasSpecular = specular.r > 0.f || specular.g > 0.f || specular.b > 0.f;
     const float shininess = std::max(material.shininess, 1.f);
 
-    Math::Color result = context.ambient * albedo + material.emissive;
+    // Hemisphere light: the ambient color slides from the ground's to the sky's with the normal's height.
+    Math::Color ambient = context.ambient;
+    if (context.hemisphere) {
+        const float up = n.y * 0.5f + 0.5f;
+
+        ambient = context.ambientGround + (context.ambient - context.ambientGround) * up;
+    }
+    Math::Color result = ambient * albedo + material.emissive;
 
     for (std::size_t i = 0; i < context.lightCount; ++i) {
         const PreparedLight& light = context.lights[i];
@@ -156,5 +226,5 @@ k3::Math::Color k3::sw::shade(const ShadingContext& context, const Material& mat
     }
 
     result.a = albedo.a;
-    return result;
+    return fogged(context, fragment.position, result);
 }

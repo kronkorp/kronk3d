@@ -1,13 +1,17 @@
-#include "HardwareRasterizer.hpp"
+#include <kronk3d/render/opengl/HardwareRasterizer.hpp>
 #include "GL.hpp"
-#include "Logger.hpp"
+#include "utils/Log.hpp"
 #include "Program.hpp"
 #include "Shaders.hpp"
+#include "render/Frustum.hpp"
 #include "render/ShadowFit.hpp"
 #include "render/software/Shading.hpp"
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <chrono>
 #include <cstdio>
+#include <iterator>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -22,6 +26,8 @@ namespace
         SPECULAR_UNIT = 1,
         OPACITY_UNIT  = 2,
         SHADOW_UNIT   = 3,
+        NORMAL_UNIT   = 4,
+        SKY_UNIT      = 5,
     };
 
     struct GpuMesh
@@ -30,7 +36,9 @@ namespace
         GLuint             vao = 0, vbo = 0, ebo = 0;
         GLsizei            count = 0;               // Indices (or vertices when not indexed)
         bool               indexed = false;
-        bool               hasNormals = false, hasUVs = false, hasColors = false;
+        std::size_t        vertexCount = 0;
+        std::uint64_t      revision = 0;            // Of the mesh these buffers were filled from
+        bool               hasNormals = false, hasUVs = false, hasColors = false, hasTangents = false;
         k3::Math::Bounds3f bounds{};
     };
 
@@ -50,6 +58,16 @@ namespace
         const GpuMesh*                      gpu = nullptr;
         k3::Math::Bounds3f                  bounds{};
         float                               viewDepth = 0.f;
+        bool                                visible = true;     // In the camera frustum: shadow passes ignore it
+        std::vector<k3::Math::Matrix4>      instances{};        // Not empty: one draw of all these placements (`transform` is unused)
+        std::vector<k3::Math::Matrix4>      visibleInstances{}; // Of them, those in the camera frustum
+    };
+
+    struct Overlay
+    {
+        std::shared_ptr<k3::Texture> texture;
+        k3::Rect                     destination, source;
+        k3::Math::Color              tint;
     };
 
     const k3::Material& defaultMaterial()
@@ -104,6 +122,14 @@ namespace
         return a.filter == b.filter && a.mipmaps == b.mipmaps && a.wrapU == b.wrapU && a.wrapV == b.wrapV;
     }
 
+    // -1 when the matrix mirrors (negative determinant of its 3x3 part).
+    float handedness(const k3::Math::Matrix4& m)
+    {
+        const float* v = m.values;
+        const float det = v[0] * (v[5] * v[10] - v[6] * v[9]) - v[1] * (v[4] * v[10] - v[6] * v[8]) + v[2] * (v[4] * v[9] - v[5] * v[8]);
+        return det < 0.f ? -1.f : 1.f;
+    }
+
     void setMatrix(GLint location, const k3::Math::Matrix4& m)
     {
         // kronk3d matrices are row-major.
@@ -112,17 +138,20 @@ namespace
 
     struct MeshUniforms
     {
-        GLint viewProjection, model, normalMatrix;
-        GLint cameraPosition, viewDirection, orthographic, ambient;
+        GLint viewProjection, model, normalMatrix, instanced;
+        GLint cameraPosition, viewDirection, orthographic, ambient, ambientGround, fogColor, fog;
         GLint lightCount, lightType, lightPosition, lightToLight, lightDirection, lightRadiance, lightRange, lightCosInner, lightCosOuter;
         GLint shadowLight, shadowMap, shadowViewProjection, shadowSize, shadowDepthBias, shadowNormalOffset, shadowPcfRadius;
+        GLint shadowCascadeCount, shadowSplit;
         GLint diffuse, specular, emissive, shininess, unlit, alphaMode, alphaCutoff;
         GLint hasNormals, hasDiffuseMap, hasSpecularMap, hasOpacityMap, diffuseMap, specularMap, opacityMap;
+        GLint handedness, hasNormalMap, normalScale, normalMap;
 
         explicit MeshUniforms(const Program& p)
-            : viewProjection(p.uniform("uViewProjection")), model(p.uniform("uModel")), normalMatrix(p.uniform("uNormalMatrix")),
+            : viewProjection(p.uniform("uViewProjection")), model(p.uniform("uModel")), normalMatrix(p.uniform("uNormalMatrix")), instanced(p.uniform("uInstanced")),
               cameraPosition(p.uniform("uCameraPosition")), viewDirection(p.uniform("uViewDirection")),
               orthographic(p.uniform("uOrthographic")), ambient(p.uniform("uAmbient")),
+              ambientGround(p.uniform("uAmbientGround")), fogColor(p.uniform("uFogColor")), fog(p.uniform("uFog")),
               lightCount(p.uniform("uLightCount")), lightType(p.uniform("uLightType")), lightPosition(p.uniform("uLightPosition")),
               lightToLight(p.uniform("uLightToLight")), lightDirection(p.uniform("uLightDirection")),
               lightRadiance(p.uniform("uLightRadiance")), lightRange(p.uniform("uLightRange")),
@@ -131,22 +160,25 @@ namespace
               shadowViewProjection(p.uniform("uShadowViewProjection")), shadowSize(p.uniform("uShadowSize")),
               shadowDepthBias(p.uniform("uShadowDepthBias")), shadowNormalOffset(p.uniform("uShadowNormalOffset")),
               shadowPcfRadius(p.uniform("uShadowPcfRadius")),
+              shadowCascadeCount(p.uniform("uShadowCascadeCount")), shadowSplit(p.uniform("uShadowSplit")),
               diffuse(p.uniform("uDiffuse")), specular(p.uniform("uSpecular")), emissive(p.uniform("uEmissive")),
               shininess(p.uniform("uShininess")), unlit(p.uniform("uUnlit")), alphaMode(p.uniform("uAlphaMode")),
               alphaCutoff(p.uniform("uAlphaCutoff")), hasNormals(p.uniform("uHasNormals")),
               hasDiffuseMap(p.uniform("uHasDiffuseMap")), hasSpecularMap(p.uniform("uHasSpecularMap")),
               hasOpacityMap(p.uniform("uHasOpacityMap")), diffuseMap(p.uniform("uDiffuseMap")),
-              specularMap(p.uniform("uSpecularMap")), opacityMap(p.uniform("uOpacityMap"))
+              specularMap(p.uniform("uSpecularMap")), opacityMap(p.uniform("uOpacityMap")),
+              handedness(p.uniform("uHandedness")), hasNormalMap(p.uniform("uHasNormalMap")),
+              normalScale(p.uniform("uNormalScale")), normalMap(p.uniform("uNormalMap"))
         {
         }
     };
 
     struct ShadowUniforms
     {
-        GLint viewProjection, model, alphaTest, diffuseAlpha, alphaCutoff, hasDiffuseMap, hasOpacityMap, diffuseMap, opacityMap;
+        GLint viewProjection, model, instanced, alphaTest, diffuseAlpha, alphaCutoff, hasDiffuseMap, hasOpacityMap, diffuseMap, opacityMap;
 
         explicit ShadowUniforms(const Program& p)
-            : viewProjection(p.uniform("uViewProjection")), model(p.uniform("uModel")), alphaTest(p.uniform("uAlphaTest")),
+            : viewProjection(p.uniform("uViewProjection")), model(p.uniform("uModel")), instanced(p.uniform("uInstanced")), alphaTest(p.uniform("uAlphaTest")),
               diffuseAlpha(p.uniform("uDiffuseAlpha")), alphaCutoff(p.uniform("uAlphaCutoff")),
               hasDiffuseMap(p.uniform("uHasDiffuseMap")), hasOpacityMap(p.uniform("uHasOpacityMap")),
               diffuseMap(p.uniform("uDiffuseMap")), opacityMap(p.uniform("uOpacityMap"))
@@ -158,8 +190,24 @@ namespace
 
 struct k3::HardwareRasterizer::Impl
 {
-    Impl(Program meshProgram, Program shadowProgram)
-        : mesh(std::move(meshProgram)), shadow(std::move(shadowProgram)), meshUniforms(mesh), shadowUniforms(shadow) {}
+    Impl(Program meshProgram, Program shadowProgram, Program ssaaProgram, Program fxaaProgram, Program skyProgram, Program overlayProgram, Program lineProgram, Program tonemapProgram)
+        : mesh(std::move(meshProgram)), shadow(std::move(shadowProgram)), ssaa(std::move(ssaaProgram)), fxaa(std::move(fxaaProgram)),
+          sky(std::move(skyProgram)), overlay(std::move(overlayProgram)), line(std::move(lineProgram)), tonemap(std::move(tonemapProgram)), meshUniforms(mesh), shadowUniforms(shadow)
+    {
+        GenVertexArrays(1, &fullscreenVao);
+
+        // Debug lines: position (3 floats) and color (4 floats) per vertex, in one streamed buffer.
+        GenVertexArrays(1, &lineVao);
+        GenBuffers(1, &lineVbo);
+        BindVertexArray(lineVao);
+        BindBuffer(ARRAY_BUFFER, lineVbo);
+        EnableVertexAttribArray(0);
+        VertexAttribPointer(0, 3, FLOAT, FALSE_, LINE_STRIDE, nullptr);
+        EnableVertexAttribArray(1);
+        VertexAttribPointer(1, 4, FLOAT, FALSE_, LINE_STRIDE, reinterpret_cast<const void*>(3 * sizeof(float)));
+        BindVertexArray(0);
+        GenBuffers(1, &instanceVbo);
+    }
 
     ~Impl()
     {
@@ -168,23 +216,52 @@ struct k3::HardwareRasterizer::Impl
         for (auto& [_, gpu] : textures)
             DeleteTextures(1, &gpu.id);
         releaseTarget();
+        if (skyTexture)
+            DeleteTextures(1, &skyTexture);
         if (shadowTexture)
             DeleteTextures(1, &shadowTexture);
         if (shadowFbo)
             DeleteFramebuffers(1, &shadowFbo);
+        DeleteVertexArrays(1, &fullscreenVao);
+        DeleteVertexArrays(1, &lineVao);
+        DeleteBuffers(1, &lineVbo);
+        DeleteBuffers(1, &instanceVbo);
     }
 
     Program        mesh;
     Program        shadow;
+    Program        ssaa;
+    Program        fxaa;
+    Program        sky;
+    Program        overlay;
+    Program        line;
+    Program        tonemap;
     MeshUniforms   meshUniforms;
     ShadowUniforms shadowUniforms;
     std::string    driver;
+    GLuint         fullscreenVao = 0;
+    GLuint         lineVao = 0, lineVbo = 0;
+    static constexpr GLsizei LINE_STRIDE = 7 * sizeof(float);
+    GLuint         instanceVbo = 0;     // Placements of an instanced draw, streamed
 
-    std::uint32_t width = 0, height = 0;
+    AntiAliasing  antiAliasing = AntiAliasing::None;
+    std::uint32_t width = 0, height = 0;                // Output size
+    float renderScale = 1.f;
+    std::uint32_t sceneWidth = 0, sceneHeight = 0;      // What the scene renders at, before supersampling
+    std::uint32_t renderWidth = 0, renderHeight = 0;    // Twice the scene's size with SSAA
     GLuint fbo = 0, colorTexture = 0, depthTexture = 0;
-    GLuint shadowFbo = 0, shadowTexture = 0;
+    bool   hdr = false;                                 // The scene renders in floating point (tone mapping on)
+    GLuint hdrTexture = 0, ldrFbo = 0;                  // Then: the float target of `fbo`, and the target of the mapped frame (colorTexture)
+    GLuint postFbo = 0, postTexture = 0;                // Anti-aliased frame
+    GLuint upFbo = 0, upTexture = 0;                    // The frame enlarged to the output size (renderScale < 1)
+    GLuint shadowFbo = 0, shadowTexture = 0;           // Texture array: one layer per cascade
     std::uint32_t shadowSize = 0;
+    std::size_t shadowLayers = 0;
     std::optional<std::uint32_t> presentFramebuffer = 0u;
+
+    GLuint                                      skyTexture = 0;     // Cube map of environment.skybox
+    std::array<std::weak_ptr<const Texture>, 6> skySources;
+    std::array<std::uint64_t, 6>                skyVersions{};
 
     std::unordered_map<const Mesh*, GpuMesh>       meshes;
     std::unordered_map<const Texture*, GpuTexture> textures;
@@ -194,6 +271,16 @@ struct k3::HardwareRasterizer::Impl
     Math::Matrix4      view = Math::Matrix4::identity();
     Math::Matrix4      viewProjection = Math::Matrix4::identity();
     std::vector<DrawCommand> commands;
+    std::vector<Overlay>     overlays;
+    struct Line
+    {
+        DebugLine   line;
+        bool        depthTested;
+        std::size_t layer;
+    };
+    std::vector<Line>        lines;             // Debug lines, drawn after the geometry of their layer
+    std::vector<Camera>      layerCameras;      // Of each layer, the frame's own first
+    std::vector<std::size_t> layerStarts;       // Index in `commands` where each layer's draws begin
     FrameStats         stats{};
 
     /* Render target */
@@ -206,18 +293,47 @@ struct k3::HardwareRasterizer::Impl
             DeleteTextures(1, &colorTexture);
         if (depthTexture)
             DeleteTextures(1, &depthTexture);
-        fbo = colorTexture = depthTexture = 0;
+        if (postFbo)
+            DeleteFramebuffers(1, &postFbo);
+        if (postTexture)
+            DeleteTextures(1, &postTexture);
+        if (upFbo)
+            DeleteFramebuffers(1, &upFbo);
+        if (upTexture)
+            DeleteTextures(1, &upTexture);
+        if (hdrTexture)
+            DeleteTextures(1, &hdrTexture);
+        if (ldrFbo)
+            DeleteFramebuffers(1, &ldrFbo);
+        fbo = colorTexture = depthTexture = postFbo = postTexture = upFbo = upTexture = hdrTexture = ldrFbo = 0;
     }
 
-    static GLuint makeTexture(GLint internalFormat, std::uint32_t w, std::uint32_t h, GLenum format, GLenum type)
+    [[nodiscard]] bool scaled() const noexcept
+    {
+        return sceneWidth != width || sceneHeight != height;
+    }
+
+    // The frame at the scene's size: the render itself, or its anti-aliased version.
+    [[nodiscard]] GLuint sceneFbo() const noexcept
+    {
+        return antiAliasing != AntiAliasing::None ? postFbo : hdr ? ldrFbo : fbo;
+    }
+
+    // The frame at the output size, what the overlay is drawn on and what is shown.
+    [[nodiscard]] GLuint finalFbo() const noexcept
+    {
+        return scaled() ? upFbo : sceneFbo();
+    }
+
+    static GLuint makeTexture(GLint internalFormat, std::uint32_t w, std::uint32_t h, GLenum format, GLenum type, GLint filter = NEAREST)
     {
         GLuint id = 0;
 
         GenTextures(1, &id);
         BindTexture(TEXTURE_2D, id);
         TexImage2D(TEXTURE_2D, 0, internalFormat, static_cast<GLsizei>(w), static_cast<GLsizei>(h), 0, format, type, nullptr);
-        TexParameteri(TEXTURE_2D, TEXTURE_MIN_FILTER, NEAREST);
-        TexParameteri(TEXTURE_2D, TEXTURE_MAG_FILTER, NEAREST);
+        TexParameteri(TEXTURE_2D, TEXTURE_MIN_FILTER, filter);
+        TexParameteri(TEXTURE_2D, TEXTURE_MAG_FILTER, filter);
         TexParameteri(TEXTURE_2D, TEXTURE_MAX_LEVEL, 0);
         TexParameteri(TEXTURE_2D, TEXTURE_WRAP_S, CLAMP_TO_EDGE);
         TexParameteri(TEXTURE_2D, TEXTURE_WRAP_T, CLAMP_TO_EDGE);
@@ -226,40 +342,141 @@ struct k3::HardwareRasterizer::Impl
 
     void resize(std::uint32_t w, std::uint32_t h)
     {
+        const std::uint32_t scale = antiAliasing == AntiAliasing::SSAA ? 2 : 1;
+
         releaseTarget();
         width = w;
         height = h;
+        sceneWidth = w ? std::max<std::uint32_t>(1, static_cast<std::uint32_t>(std::lround(static_cast<float>(w) * renderScale))) : 0;
+        sceneHeight = h ? std::max<std::uint32_t>(1, static_cast<std::uint32_t>(std::lround(static_cast<float>(h) * renderScale))) : 0;
+        renderWidth = sceneWidth * scale;
+        renderHeight = sceneHeight * scale;
         if (w == 0 || h == 0)
             return;
 
-        colorTexture = makeTexture(static_cast<GLint>(SRGB8_ALPHA8), w, h, RGBA, UNSIGNED_BYTE);
-        depthTexture = makeTexture(static_cast<GLint>(DEPTH_COMPONENT24), w, h, DEPTH_COMPONENT, FLOAT);
+        // Linear filtering: FXAA reads the frame between texels.
+        colorTexture = makeTexture(static_cast<GLint>(SRGB8_ALPHA8), renderWidth, renderHeight, RGBA, UNSIGNED_BYTE, LINEAR);
+        depthTexture = makeTexture(static_cast<GLint>(DEPTH_COMPONENT24), renderWidth, renderHeight, DEPTH_COMPONENT, FLOAT);
         GenFramebuffers(1, &fbo);
         BindFramebuffer(FRAMEBUFFER, fbo);
-        FramebufferTexture2D(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, colorTexture, 0);
+        if (hdr) {
+            // The scene lives in floating point; colorTexture then holds the tone-mapped frame.
+            hdrTexture = makeTexture(static_cast<GLint>(RGBA16F), renderWidth, renderHeight, RGBA, FLOAT);
+            FramebufferTexture2D(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, hdrTexture, 0);
+        } else {
+            FramebufferTexture2D(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, colorTexture, 0);
+        }
         FramebufferTexture2D(FRAMEBUFFER, DEPTH_ATTACHMENT, TEXTURE_2D, depthTexture, 0);
         if (CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE)
-            Logger::logger().error("OpenGL: incomplete render target {}x{}", w, h);
+            log(LogLevel::Error, "OpenGL: incomplete render target {}x{}", renderWidth, renderHeight);
+
+        if (hdr) {
+            GenFramebuffers(1, &ldrFbo);
+            BindFramebuffer(FRAMEBUFFER, ldrFbo);
+            FramebufferTexture2D(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, colorTexture, 0);
+            if (CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE)
+                log(LogLevel::Error, "OpenGL: incomplete tone-mapped target {}x{}", renderWidth, renderHeight);
+        }
+
+        if (antiAliasing != AntiAliasing::None) {
+            postTexture = makeTexture(static_cast<GLint>(SRGB8_ALPHA8), sceneWidth, sceneHeight, RGBA, UNSIGNED_BYTE);
+            GenFramebuffers(1, &postFbo);
+            BindFramebuffer(FRAMEBUFFER, postFbo);
+            FramebufferTexture2D(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, postTexture, 0);
+            if (CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE)
+                log(LogLevel::Error, "OpenGL: incomplete anti-aliasing target {}x{}", sceneWidth, sceneHeight);
+        }
+
+        if (scaled()) {
+            upTexture = makeTexture(static_cast<GLint>(SRGB8_ALPHA8), w, h, RGBA, UNSIGNED_BYTE);
+            GenFramebuffers(1, &upFbo);
+            BindFramebuffer(FRAMEBUFFER, upFbo);
+            FramebufferTexture2D(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, upTexture, 0);
+            if (CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE)
+                log(LogLevel::Error, "OpenGL: incomplete output target {}x{}", w, h);
+        }
         BindFramebuffer(FRAMEBUFFER, 0);
     }
 
-    void ensureShadowTarget(std::uint32_t size)
+    // The high dynamic range scene to a displayable frame (colorTexture), before anti-aliasing.
+    void toneMap()
     {
-        if (size == shadowSize && shadowFbo)
+        if (!hdr)
+            return;
+
+        const GLint curve = environment.toneMapping == ToneMapping::Reinhard ? 1 : 2;
+
+        BindFramebuffer(FRAMEBUFFER, ldrFbo);
+        Viewport(0, 0, static_cast<GLsizei>(renderWidth), static_cast<GLsizei>(renderHeight));
+        Enable(FRAMEBUFFER_SRGB);
+        Disable(DEPTH_TEST);
+        Disable(CULL_FACE);
+        Disable(BLEND);
+        UseProgram(tonemap.id());
+        Uniform1i(tonemap.uniform("uSource"), 0);
+        Uniform1f(tonemap.uniform("uExposure"), environment.exposure);
+        Uniform1i(tonemap.uniform("uCurve"), curve);
+        ActiveTexture(TEXTURE0);
+        BindTexture(TEXTURE_2D, hdrTexture);
+        BindVertexArray(fullscreenVao);
+        DrawArrays(TRIANGLES, 0, 3);
+        Disable(FRAMEBUFFER_SRGB);
+    }
+
+    // SSAA resolve or FXAA, from the rendered frame into the output frame.
+    void antiAlias()
+    {
+        if (antiAliasing == AntiAliasing::None)
+            return;
+
+        BindFramebuffer(FRAMEBUFFER, postFbo);
+        Viewport(0, 0, static_cast<GLsizei>(sceneWidth), static_cast<GLsizei>(sceneHeight));
+        Enable(FRAMEBUFFER_SRGB);
+        Disable(DEPTH_TEST);
+        Disable(CULL_FACE);
+        Disable(BLEND);
+
+        const Program& program = antiAliasing == AntiAliasing::SSAA ? ssaa : fxaa;
+        UseProgram(program.id());
+        Uniform1i(program.uniform("uSource"), 0);
+        ActiveTexture(TEXTURE0);
+        BindTexture(TEXTURE_2D, colorTexture);
+        BindVertexArray(fullscreenVao);
+        DrawArrays(TRIANGLES, 0, 3);
+        Disable(FRAMEBUFFER_SRGB);
+    }
+
+    // Enlarges the scene's frame to the output size without filtering (raw bytes: no sRGB conversion).
+    void upscale()
+    {
+        if (!scaled())
+            return;
+
+        Disable(FRAMEBUFFER_SRGB);
+        BindFramebuffer(READ_FRAMEBUFFER, sceneFbo());
+        BindFramebuffer(DRAW_FRAMEBUFFER, upFbo);
+        BlitFramebuffer(0, 0, static_cast<GLint>(sceneWidth), static_cast<GLint>(sceneHeight), 0, 0, static_cast<GLint>(width), static_cast<GLint>(height), COLOR_BUFFER_BIT, NEAREST);
+    }
+
+    void ensureShadowTarget(std::uint32_t size, std::size_t layers)
+    {
+        if (!shadowFbo)
+            GenFramebuffers(1, &shadowFbo);
+        if (size == shadowSize && layers == shadowLayers && shadowTexture)
             return;
         if (shadowTexture)
             DeleteTextures(1, &shadowTexture);
-        if (!shadowFbo)
-            GenFramebuffers(1, &shadowFbo);
 
         shadowSize = size;
-        shadowTexture = makeTexture(static_cast<GLint>(DEPTH_COMPONENT32F), size, size, DEPTH_COMPONENT, FLOAT);
-        BindFramebuffer(FRAMEBUFFER, shadowFbo);
-        FramebufferTexture2D(FRAMEBUFFER, DEPTH_ATTACHMENT, TEXTURE_2D, shadowTexture, 0);
-        DrawBuffer(NONE);
-        ReadBuffer(NONE);
-        if (CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE)
-            Logger::logger().error("OpenGL: incomplete shadow map {}x{}", size, size);
+        shadowLayers = layers;
+        GenTextures(1, &shadowTexture);
+        BindTexture(TEXTURE_2D_ARRAY, shadowTexture);
+        TexImage3D(TEXTURE_2D_ARRAY, 0, static_cast<GLint>(DEPTH_COMPONENT32F), static_cast<GLsizei>(size), static_cast<GLsizei>(size), static_cast<GLsizei>(layers), 0, DEPTH_COMPONENT, FLOAT, nullptr);
+        TexParameteri(TEXTURE_2D_ARRAY, TEXTURE_MIN_FILTER, NEAREST);
+        TexParameteri(TEXTURE_2D_ARRAY, TEXTURE_MAG_FILTER, NEAREST);
+        TexParameteri(TEXTURE_2D_ARRAY, TEXTURE_MAX_LEVEL, 0);
+        TexParameteri(TEXTURE_2D_ARRAY, TEXTURE_WRAP_S, CLAMP_TO_EDGE);
+        TexParameteri(TEXTURE_2D_ARRAY, TEXTURE_WRAP_T, CLAMP_TO_EDGE);
     }
 
     /* Resource cache */
@@ -282,17 +499,24 @@ struct k3::HardwareRasterizer::Impl
             release(gpu);
         if (!gpu.vao)
             upload(*source, gpu);
+        else if (gpu.revision != source->revision)
+            refresh(*source, gpu);
         gpu.source = source;
         return gpu;
     }
 
-    static void upload(const Mesh& mesh, GpuMesh& gpu)
+    // Fills the vertex buffer (bound, with its VAO) from the mesh. Reallocating first lets the driver
+    // orphan the old storage instead of waiting for the GPU to be done with it.
+    static void writeVertices(const Mesh& mesh, GpuMesh& gpu)
     {
         const std::size_t n = mesh.vertexCount();
 
+        gpu.vertexCount = n;
+        gpu.revision = mesh.revision;
         gpu.hasNormals = mesh.hasNormals();
         gpu.hasUVs = mesh.hasUVs();
         gpu.hasColors = mesh.hasColors();
+        gpu.hasTangents = mesh.hasTangents();
         gpu.bounds = mesh.bounds();
 
         // One buffer, attributes one after the other: positions, normals, uvs, colors.
@@ -300,12 +524,9 @@ struct k3::HardwareRasterizer::Impl
         const std::size_t normalsSize = gpu.hasNormals ? n * sizeof(Math::Vector3f) : 0;
         const std::size_t uvsSize = gpu.hasUVs ? n * sizeof(Math::Vector2f) : 0;
         const std::size_t colorsSize = gpu.hasColors ? n * sizeof(Math::Color) : 0;
+        const std::size_t tangentsSize = gpu.hasTangents ? n * sizeof(Math::Vector4f) : 0;
 
-        GenVertexArrays(1, &gpu.vao);
-        BindVertexArray(gpu.vao);
-        GenBuffers(1, &gpu.vbo);
-        BindBuffer(ARRAY_BUFFER, gpu.vbo);
-        BufferData(ARRAY_BUFFER, static_cast<GLsizeiptr>(positionsSize + normalsSize + uvsSize + colorsSize), nullptr, STATIC_DRAW);
+        BufferData(ARRAY_BUFFER, static_cast<GLsizeiptr>(positionsSize + normalsSize + uvsSize + colorsSize + tangentsSize), nullptr, STATIC_DRAW);
 
         std::size_t offset = 0;
         auto attribute = [&](GLuint location, GLint components, const void* data, std::size_t size) {
@@ -322,6 +543,32 @@ struct k3::HardwareRasterizer::Impl
         attribute(shaders::NORMAL, 3, mesh.normals.data(), normalsSize);
         attribute(shaders::UV, 2, mesh.uvs.data(), uvsSize);
         attribute(shaders::COLOR, 4, mesh.colors.data(), colorsSize);
+        attribute(shaders::TANGENT, 4, mesh.tangents.data(), tangentsSize);
+    }
+
+    // The mesh was edited in place (same vertex count, same indices): rewrite the vertices only.
+    static void refresh(const Mesh& mesh, GpuMesh& gpu)
+    {
+        if (mesh.vertexCount() != gpu.vertexCount) {
+            release(gpu);
+            upload(mesh, gpu);
+            return;
+        }
+        BindVertexArray(gpu.vao);
+        BindBuffer(ARRAY_BUFFER, gpu.vbo);
+        writeVertices(mesh, gpu);
+        BindVertexArray(0);
+    }
+
+    static void upload(const Mesh& mesh, GpuMesh& gpu)
+    {
+        const std::size_t n = mesh.vertexCount();
+
+        GenVertexArrays(1, &gpu.vao);
+        BindVertexArray(gpu.vao);
+        GenBuffers(1, &gpu.vbo);
+        BindBuffer(ARRAY_BUFFER, gpu.vbo);
+        writeVertices(mesh, gpu);
 
         // Out-of-range indices would read outside the buffer: drop those triangles, as the software backend does.
         const std::size_t indexCount = mesh.indexCount() / 3 * 3;
@@ -424,26 +671,58 @@ struct k3::HardwareRasterizer::Impl
             VertexAttrib4f(shaders::UV, 0.f, 0.f, 0.f, 1.f);
         if (!gpu.hasColors)
             VertexAttrib4f(shaders::COLOR, 1.f, 1.f, 1.f, 1.f);
+        if (!gpu.hasTangents)
+            VertexAttrib4f(shaders::TANGENT, 0.f, 0.f, 0.f, 0.f);
         DrawElements(TRIANGLES, gpu.count, UNSIGNED_INT, nullptr);
     }
 
-    // Returns the index of the shadow-casting light if a shadow map was rendered, -1 otherwise.
-    int renderShadows(const sw::ShadingContext& lights, std::size_t firstBlended, ShadowProjection& projection)
+    // One call for all `placements`: they stream through a buffer read once per instance (locations 8 to 11,
+    // a column of the model matrix each). The mesh's own array object is left as it was.
+    void drawMeshInstanced(const GpuMesh& gpu, const std::vector<k3::Math::Matrix4>& placements)
+    {
+        if (placements.empty())
+            return;
+
+        // OpenGL wants columns: the matrices are row-major.
+        std::vector<float> columns;
+        columns.reserve(placements.size() * 16);
+        for (const k3::Math::Matrix4& m : placements) {
+            for (int column = 0; column < 4; ++column)
+                columns.insert(columns.end(), {m.values[column], m.values[4 + column], m.values[8 + column], m.values[12 + column]});
+        }
+
+        BindVertexArray(gpu.vao);
+        BindBuffer(ARRAY_BUFFER, instanceVbo);
+        BufferData(ARRAY_BUFFER, static_cast<GLsizeiptr>(columns.size() * sizeof(float)), columns.data(), STATIC_DRAW);
+        for (GLuint column = 0; column < 4; ++column) {
+            EnableVertexAttribArray(8 + column);
+            VertexAttribPointer(8 + column, 4, FLOAT, FALSE_, 16 * sizeof(float), reinterpret_cast<const void*>(column * 4 * sizeof(float)));
+            VertexAttribDivisor(8 + column, 1);
+        }
+        if (!gpu.hasNormals)
+            VertexAttrib4f(shaders::NORMAL, 0.f, 0.f, 0.f, 0.f);
+        if (!gpu.hasUVs)
+            VertexAttrib4f(shaders::UV, 0.f, 0.f, 0.f, 1.f);
+        if (!gpu.hasColors)
+            VertexAttrib4f(shaders::COLOR, 1.f, 1.f, 1.f, 1.f);
+        if (!gpu.hasTangents)
+            VertexAttrib4f(shaders::TANGENT, 0.f, 0.f, 0.f, 0.f);
+        DrawElementsInstanced(TRIANGLES, gpu.count, UNSIGNED_INT, nullptr, static_cast<GLsizei>(placements.size()));
+        for (GLuint column = 0; column < 4; ++column) {
+            VertexAttribDivisor(8 + column, 0);
+            DisableVertexAttribArray(8 + column);
+        }
+    }
+
+    // Renders one shadow map per cascade. Returns the index of the shadow-casting light if they were
+    // rendered, -1 otherwise.
+    int renderShadows(const sw::ShadingContext& lights, std::size_t firstBlended, std::vector<ShadowCascade>& cascades)
     {
         const ShadowSettings& settings = environment.shadows;
 
+        cascades.clear();
         if (lights.shadowLight < 0 || settings.resolution == 0)
             return -1;
-
-        Math::Bounds3f bounds = settings.bounds;
-        if (bounds.empty())
-            for (const DrawCommand& command : commands)
-                bounds.merge(command.bounds);
-
-        const auto fitted = fitShadowProjection(bounds, lights.lights[lights.shadowLight].direction);
-        if (!fitted)
-            return -1;
-        projection = *fitted;
 
         bool anyCaster = false;
         for (std::size_t d = 0; d < firstBlended; ++d)
@@ -451,12 +730,22 @@ struct k3::HardwareRasterizer::Impl
         if (!anyCaster)
             return -1;
 
-        ensureShadowTarget(settings.resolution);
+        Math::Bounds3f sceneBounds;
+        for (const DrawCommand& command : commands)
+            sceneBounds.merge(command.bounds);
+
+        const float aspect = height ? static_cast<float>(width) / height : 1.f;
+        cascades = fitShadowCascades(settings, camera, aspect, sceneBounds, lights.lights[lights.shadowLight].direction);
+        if (cascades.empty())
+            return -1;
+
+        ensureShadowTarget(settings.resolution, cascades.size());
         BindFramebuffer(FRAMEBUFFER, shadowFbo);
+        DrawBuffer(NONE);
+        ReadBuffer(NONE);
         Viewport(0, 0, static_cast<GLsizei>(settings.resolution), static_cast<GLsizei>(settings.resolution));
         DepthMask(TRUE_);
         ClearDepth(1.0);
-        Clear(DEPTH_BUFFER_BIT);
         // Both faces, like the software backend: thin single-sided geometry still casts.
         Disable(CULL_FACE);
         Disable(BLEND);
@@ -464,32 +753,43 @@ struct k3::HardwareRasterizer::Impl
         DepthFunc(LESS);
 
         UseProgram(shadow.id());
-        setMatrix(shadowUniforms.viewProjection, projection.viewProjection);
         Uniform1i(shadowUniforms.diffuseMap, DIFFUSE_UNIT);
         Uniform1i(shadowUniforms.opacityMap, OPACITY_UNIT);
 
-        for (std::size_t d = 0; d < firstBlended; ++d) {
-            const DrawCommand& command = commands[d];
-            const Material& material = materialOf(command);
+        for (std::size_t c = 0; c < cascades.size(); ++c) {
+            FramebufferTextureLayer(FRAMEBUFFER, DEPTH_ATTACHMENT, shadowTexture, 0, static_cast<GLint>(c));
+            if (c == 0 && CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE)
+                log(LogLevel::Error, "OpenGL: incomplete shadow map {}x{}", settings.resolution, settings.resolution);
+            Clear(DEPTH_BUFFER_BIT);
+            setMatrix(shadowUniforms.viewProjection, cascades[c].viewProjection);
 
-            if (!material.castShadows)
-                continue;
+            for (std::size_t d = 0; d < firstBlended; ++d) {
+                const DrawCommand& command = commands[d];
+                const Material& material = materialOf(command);
 
-            const bool alphaTest = material.alphaMode == AlphaMode::Mask;
-            setMatrix(shadowUniforms.model, command.transform);
-            Uniform1i(shadowUniforms.alphaTest, alphaTest);
-            if (alphaTest) {
-                Uniform1f(shadowUniforms.diffuseAlpha, material.diffuse.a);
-                Uniform1f(shadowUniforms.alphaCutoff, material.alphaCutoff);
-                Uniform1i(shadowUniforms.hasDiffuseMap, bindTexture(DIFFUSE_UNIT, material.diffuseMap));
-                Uniform1i(shadowUniforms.hasOpacityMap, bindTexture(OPACITY_UNIT, material.opacityMap));
+                if (!material.castShadows)
+                    continue;
+
+                const bool alphaTest = material.alphaMode == AlphaMode::Mask;
+                setMatrix(shadowUniforms.model, command.transform);
+                Uniform1i(shadowUniforms.instanced, !command.instances.empty());
+                Uniform1i(shadowUniforms.alphaTest, alphaTest);
+                if (alphaTest) {
+                    Uniform1f(shadowUniforms.diffuseAlpha, material.diffuse.a);
+                    Uniform1f(shadowUniforms.alphaCutoff, material.alphaCutoff);
+                    Uniform1i(shadowUniforms.hasDiffuseMap, bindTexture(DIFFUSE_UNIT, material.diffuseMap));
+                    Uniform1i(shadowUniforms.hasOpacityMap, bindTexture(OPACITY_UNIT, material.opacityMap));
+                }
+                if (command.instances.empty())
+                    drawMesh(*command.gpu);
+                else
+                    drawMeshInstanced(*command.gpu, command.instances);       // Every instance casts, seen or not
             }
-            drawMesh(*command.gpu);
         }
         return lights.shadowLight;
     }
 
-    void setFrameUniforms(const sw::ShadingContext& lights, int shadowLight, const ShadowProjection& projection)
+    void setFrameUniforms(const sw::ShadingContext& lights, int shadowLight, const std::vector<ShadowCascade>& cascades)
     {
         const auto& u = meshUniforms;
         GLint types[MAX_LIGHTS]{};
@@ -520,6 +820,9 @@ struct k3::HardwareRasterizer::Impl
         Uniform3f(u.viewDirection, lights.viewDirection.x, lights.viewDirection.y, lights.viewDirection.z);
         Uniform1i(u.orthographic, lights.orthographic);
         Uniform3f(u.ambient, lights.ambient.r, lights.ambient.g, lights.ambient.b);
+        Uniform4f(u.ambientGround, lights.ambientGround.r, lights.ambientGround.g, lights.ambientGround.b, lights.hemisphere ? 1.f : 0.f);
+        Uniform4f(u.fogColor, lights.fog.color.r, lights.fog.color.g, lights.fog.color.b, lights.fog.enabled ? 1.f : 0.f);
+        Uniform4f(u.fog, lights.fog.density, lights.fog.falloff, 0.f, 0.f);
         Uniform1i(u.lightCount, static_cast<GLint>(lights.lightCount));
         Uniform1iv(u.lightType, MAX_LIGHTS, types);
         Uniform3fv(u.lightPosition, MAX_LIGHTS, positions);
@@ -533,17 +836,27 @@ struct k3::HardwareRasterizer::Impl
         Uniform1i(u.diffuseMap, DIFFUSE_UNIT);
         Uniform1i(u.specularMap, SPECULAR_UNIT);
         Uniform1i(u.opacityMap, OPACITY_UNIT);
+        Uniform1i(u.normalMap, NORMAL_UNIT);
         Uniform1i(u.shadowMap, SHADOW_UNIT);
         Uniform1i(u.shadowLight, shadowLight);
         if (shadowLight >= 0) {
             const ShadowSettings& settings = environment.shadows;
+            GLfloat matrices[MAX_SHADOW_CASCADES * 16]{}, offsets[MAX_SHADOW_CASCADES]{}, splits[MAX_SHADOW_CASCADES]{};
+
+            for (std::size_t c = 0; c < cascades.size(); ++c) {
+                std::copy(std::begin(cascades[c].viewProjection.values), std::end(cascades[c].viewProjection.values), matrices + c * 16);
+                offsets[c] = settings.normalBias * cascades[c].texelSize;
+                splits[c] = cascades[c].splitDistance;
+            }
 
             ActiveTexture(TEXTURE0 + SHADOW_UNIT);
-            BindTexture(TEXTURE_2D, shadowTexture);
-            setMatrix(u.shadowViewProjection, projection.viewProjection);
+            BindTexture(TEXTURE_2D_ARRAY, shadowTexture);
+            Uniform1i(u.shadowCascadeCount, static_cast<GLint>(cascades.size()));
+            UniformMatrix4fv(u.shadowViewProjection, static_cast<GLsizei>(cascades.size()), TRUE_, matrices);
+            Uniform1fv(u.shadowNormalOffset, static_cast<GLsizei>(cascades.size()), offsets);
+            Uniform1fv(u.shadowSplit, static_cast<GLsizei>(cascades.size()), splits);
             Uniform1i(u.shadowSize, static_cast<GLint>(settings.resolution));
             Uniform1f(u.shadowDepthBias, settings.depthBias);
-            Uniform1f(u.shadowNormalOffset, settings.normalBias * 2.f * projection.radius / static_cast<float>(settings.resolution));
             Uniform1i(u.shadowPcfRadius, std::max(settings.pcfRadius, 0));
         }
     }
@@ -562,17 +875,94 @@ struct k3::HardwareRasterizer::Impl
         Uniform1i(u.unlit, material.unlit);
         Uniform1i(u.alphaMode, static_cast<GLint>(material.alphaMode));
         Uniform1f(u.alphaCutoff, material.alphaCutoff);
-        Uniform1i(u.hasNormals, command.gpu->hasNormals);
+        Uniform1i(u.hasNormals, command.gpu->hasNormals && !material.flatShading);
         Uniform1i(u.hasDiffuseMap, bindTexture(DIFFUSE_UNIT, material.diffuseMap));
         Uniform1i(u.hasSpecularMap, bindTexture(SPECULAR_UNIT, material.specularMap));
         Uniform1i(u.hasOpacityMap, bindTexture(OPACITY_UNIT, material.opacityMap));
-        drawMesh(*command.gpu);
+
+        const GpuMesh& gpu = *command.gpu;
+        const bool normalMapped = material.normalMap && gpu.hasNormals && gpu.hasUVs && gpu.hasTangents;
+        Uniform1i(u.hasNormalMap, normalMapped && bindTexture(NORMAL_UNIT, material.normalMap));
+        Uniform1f(u.normalScale, material.normalScale);
+        Uniform1f(u.handedness, handedness(command.transform));
+        Uniform1i(u.instanced, !command.instances.empty());
+        if (command.instances.empty())
+            drawMesh(gpu);
+        else
+            drawMeshInstanced(gpu, command.visibleInstances);
     }
 
-    void renderMain(std::size_t firstBlended)
+    // Binds the sky cube map on SKY_UNIT (uploading it when the skybox changed); false without a valid skybox.
+    bool bindSky()
+    {
+        const Skybox& skybox = environment.skybox;
+
+        if (!skybox.valid())
+            return false;
+
+        bool stale = skyTexture == 0;
+        for (std::size_t i = 0; i < 6; ++i)
+            stale = stale || skySources[i].lock() != skybox.faces[i] || skyVersions[i] != skybox.faces[i]->version();
+
+        ActiveTexture(TEXTURE0 + SKY_UNIT);
+        if (!skyTexture)
+            GenTextures(1, &skyTexture);
+        BindTexture(TEXTURE_CUBE_MAP, skyTexture);
+        if (stale) {
+            PixelStorei(UNPACK_ALIGNMENT, 1);
+            for (std::size_t i = 0; i < 6; ++i) {
+                const Texture& face = *skybox.faces[i];
+                const GLint format = static_cast<GLint>(face.colorSpace() == ColorSpace::Srgb ? SRGB8_ALPHA8 : RGBA8);
+
+                TexImage2D(TEXTURE_CUBE_MAP_POSITIVE_X + static_cast<GLenum>(i), 0, format, static_cast<GLsizei>(face.width()), static_cast<GLsizei>(face.height()), 0, RGBA, UNSIGNED_BYTE, face.image().pixels.data());
+                skySources[i] = skybox.faces[i];
+                skyVersions[i] = face.version();
+            }
+            TexParameteri(TEXTURE_CUBE_MAP, TEXTURE_WRAP_S, CLAMP_TO_EDGE);
+            TexParameteri(TEXTURE_CUBE_MAP, TEXTURE_WRAP_T, CLAMP_TO_EDGE);
+            TexParameteri(TEXTURE_CUBE_MAP, TEXTURE_WRAP_R, CLAMP_TO_EDGE);
+        }
+        const GLint filter = skybox.faces[0]->sampler.filter == TextureFilter::Linear ? LINEAR : NEAREST;
+
+        TexParameteri(TEXTURE_CUBE_MAP, TEXTURE_MIN_FILTER, filter);
+        TexParameteri(TEXTURE_CUBE_MAP, TEXTURE_MAG_FILTER, filter);
+        return true;
+    }
+
+    // Fills the pixels no opaque geometry covered.
+    void drawSky()
+    {
+        if (!bindSky())
+            return;
+
+        const float* v = view.values;
+        const float tanY = std::tan(camera.fovY * 0.5f);
+        const float aspect = height ? static_cast<float>(width) / static_cast<float>(height) : 1.f;
+
+        DepthFunc(LEQUAL);
+        DepthMask(FALSE_);
+        Disable(BLEND);
+        Disable(CULL_FACE);
+        UseProgram(sky.id());
+        Uniform3f(sky.uniform("uRight"), v[0], v[1], v[2]);
+        Uniform3f(sky.uniform("uUp"), v[4], v[5], v[6]);
+        Uniform3f(sky.uniform("uBack"), v[8], v[9], v[10]);
+        Uniform4f(sky.uniform("uView"), tanY * aspect, tanY, camera.projection == Projection::Orthographic ? 1.f : 0.f, 0.f);
+        Uniform4f(sky.uniform("uViewport"), static_cast<float>(renderWidth), static_cast<float>(renderHeight), 0.f, 0.f);
+        Uniform4f(sky.uniform("uTint"), environment.skybox.tint.r, environment.skybox.tint.g, environment.skybox.tint.b, 1.f);
+        Uniform1i(sky.uniform("uSky"), SKY_UNIT);
+        BindVertexArray(fullscreenVao);
+        DrawArrays(TRIANGLES, 0, 3);
+
+        DepthFunc(LESS);
+        UseProgram(mesh.id());
+    }
+
+    // `firstLayer`: start from the clear color and draw the sky; a later layer only clears the depth.
+    void renderMain(std::size_t firstBlended, bool firstLayer)
     {
         BindFramebuffer(FRAMEBUFFER, fbo);
-        Viewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+        Viewport(0, 0, static_cast<GLsizei>(renderWidth), static_cast<GLsizei>(renderHeight));
         // Shading happens in linear space; the sRGB target encodes on write and blends in linear,
         // exactly like the software backend.
         Enable(FRAMEBUFFER_SRGB);
@@ -580,13 +970,15 @@ struct k3::HardwareRasterizer::Impl
         DepthMask(TRUE_);
         ClearColor(environment.clearColor.r, environment.clearColor.g, environment.clearColor.b, environment.clearColor.a);
         ClearDepth(1.0);
-        Clear(COLOR_BUFFER_BIT | DEPTH_BUFFER_BIT);
+        Clear(firstLayer ? COLOR_BUFFER_BIT | DEPTH_BUFFER_BIT : DEPTH_BUFFER_BIT);
         Enable(DEPTH_TEST);
         DepthFunc(LESS);
         FrontFace(CCW);
         Disable(BLEND);
 
         for (std::size_t d = 0; d < firstBlended; ++d) {
+            if (!commands[d].visible)
+                continue;
             if (materialOf(commands[d]).doubleSided) {
                 Disable(CULL_FACE);
             } else {
@@ -596,6 +988,9 @@ struct k3::HardwareRasterizer::Impl
             drawShaded(commands[d]);
         }
 
+        if (firstLayer)
+            drawSky();
+
         // Blended geometry, farthest first, depth-tested but not written. A double-sided blended mesh
         // draws its back faces first so they end up behind its front faces.
         DepthMask(FALSE_);
@@ -603,6 +998,8 @@ struct k3::HardwareRasterizer::Impl
         BlendFuncSeparate(SRC_ALPHA, ONE_MINUS_SRC_ALPHA, ONE, ONE_MINUS_SRC_ALPHA);
         Enable(CULL_FACE);
         for (std::size_t d = firstBlended; d < commands.size(); ++d) {
+            if (!commands[d].visible)
+                continue;
             if (materialOf(commands[d]).doubleSided) {
                 CullFace(FRONT);
                 drawShaded(commands[d]);
@@ -616,11 +1013,98 @@ struct k3::HardwareRasterizer::Impl
         Disable(FRAMEBUFFER_SRGB);
     }
 
+    // 2D overlay over the finished frame, in submission order. Blending happens in linear space: the
+    // target is sRGB and the software backend blends the same way.
+    void drawOverlays()
+    {
+        if (overlays.empty())
+            return;
+
+        BindFramebuffer(FRAMEBUFFER, finalFbo());
+        Viewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+        Enable(FRAMEBUFFER_SRGB);
+        Disable(DEPTH_TEST);
+        Disable(CULL_FACE);
+        Enable(BLEND);
+        BlendFuncSeparate(SRC_ALPHA, ONE_MINUS_SRC_ALPHA, ONE, ONE_MINUS_SRC_ALPHA);
+        UseProgram(overlay.id());
+        Uniform4f(overlay.uniform("uViewport"), static_cast<float>(width), static_cast<float>(height), 0.f, 0.f);
+        Uniform1i(overlay.uniform("uImage"), 0);
+        BindVertexArray(fullscreenVao);
+
+        const GLint rect = overlay.uniform("uRect"), sourceUniform = overlay.uniform("uSource");
+        const GLint hasImage = overlay.uniform("uHasImage"), tintUniform = overlay.uniform("uTint");
+
+        for (const Overlay& entry : overlays) {
+            const Rect& to = entry.destination;
+
+            if (!(to.width > 0.f && to.height > 0.f))
+                continue;
+
+            const bool textured = bindTexture(0, entry.texture);
+            Rect from = entry.source;
+
+            if (textured && (from.width == 0.f || from.height == 0.f))
+                from = {0.f, 0.f, static_cast<float>(entry.texture->width()), static_cast<float>(entry.texture->height())};
+            const float w = textured ? static_cast<float>(entry.texture->width()) : 1.f;
+            const float h = textured ? static_cast<float>(entry.texture->height()) : 1.f;
+
+            Uniform1i(hasImage, textured);
+            Uniform4f(rect, to.x, to.y, to.width, to.height);
+            Uniform4f(sourceUniform, from.x / w, from.y / h, (from.x + from.width) / w, (from.y + from.height) / h);
+            Uniform4f(tintUniform, entry.tint.r, entry.tint.g, entry.tint.b, entry.tint.a);
+            DrawArrays(TRIANGLES, 0, 6);
+        }
+        Disable(BLEND);
+        Disable(FRAMEBUFFER_SRGB);
+    }
+
+    // Debug lines of a layer, over its geometry: two batches, the depth-tested ones then the others.
+    void drawDebugLines(std::size_t layer)
+    {
+        std::vector<float> vertices;
+
+        Enable(FRAMEBUFFER_SRGB);       // Blend in linear space, like everything else
+        Disable(CULL_FACE);
+        DepthMask(FALSE_);
+        Enable(BLEND);
+        BlendFuncSeparate(SRC_ALPHA, ONE_MINUS_SRC_ALPHA, ONE, ONE_MINUS_SRC_ALPHA);
+        DepthFunc(LEQUAL);
+
+        for (const bool depthTested : {true, false}) {
+            vertices.clear();
+            for (const Line& entry : lines) {
+                if (entry.layer != layer || entry.depthTested != depthTested)
+                    continue;
+                for (const Math::Vector3f& end : {entry.line.from, entry.line.to})
+                    vertices.insert(vertices.end(), {end.x, end.y, end.z, entry.line.color.r, entry.line.color.g, entry.line.color.b, entry.line.color.a});
+            }
+            if (vertices.empty())
+                continue;
+
+            if (depthTested)
+                Enable(DEPTH_TEST);
+            else
+                Disable(DEPTH_TEST);
+            UseProgram(line.id());
+            setMatrix(line.uniform("uViewProjection"), viewProjection);
+            BindVertexArray(lineVao);
+            BindBuffer(ARRAY_BUFFER, lineVbo);
+            BufferData(ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(float)), vertices.data(), STATIC_DRAW);
+            DrawArrays(LINES, 0, static_cast<GLsizei>(vertices.size() / 7));
+        }
+        BindVertexArray(0);
+        Enable(DEPTH_TEST);
+        DepthFunc(LESS);
+        Disable(BLEND);
+        Disable(FRAMEBUFFER_SRGB);
+    }
+
     void present()
     {
         if (!presentFramebuffer || !fbo)
             return;
-        BindFramebuffer(READ_FRAMEBUFFER, fbo);
+        BindFramebuffer(READ_FRAMEBUFFER, finalFbo());
         BindFramebuffer(DRAW_FRAMEBUFFER, *presentFramebuffer);
         const auto w = static_cast<GLint>(width), h = static_cast<GLint>(height);
         BlitFramebuffer(0, 0, w, h, 0, 0, w, h, COLOR_BUFFER_BIT, NEAREST);
@@ -662,11 +1146,31 @@ k3::Result<std::unique_ptr<k3::HardwareRasterizer>> k3::HardwareRasterizer::crea
     auto shadow = gl::Program::create(gl::shaders::SHADOW_VERTEX, gl::shaders::SHADOW_FRAGMENT);
     if (!shadow)
         return Error{"OpenGL: shadow shader: " + shadow.error()};
+    auto ssaa = gl::Program::create(gl::shaders::FULLSCREEN_VERTEX, gl::shaders::SSAA_FRAGMENT);
+    if (!ssaa)
+        return Error{"OpenGL: SSAA shader: " + ssaa.error()};
+    auto fxaa = gl::Program::create(gl::shaders::FULLSCREEN_VERTEX, gl::shaders::FXAA_FRAGMENT);
+    if (!fxaa)
+        return Error{"OpenGL: FXAA shader: " + fxaa.error()};
 
-    auto impl = std::make_unique<Impl>(std::move(*mesh), std::move(*shadow));
+    auto sky = gl::Program::create(gl::shaders::SKY_VERTEX, gl::shaders::SKY_FRAGMENT);
+    if (!sky)
+        return Error{"OpenGL: sky shader: " + sky.error()};
+    auto overlay = gl::Program::create(gl::shaders::OVERLAY_VERTEX, gl::shaders::OVERLAY_FRAGMENT);
+    if (!overlay)
+        return Error{"OpenGL: overlay shader: " + overlay.error()};
+
+    auto line = gl::Program::create(gl::shaders::LINE_VERTEX, gl::shaders::LINE_FRAGMENT);
+    if (!line)
+        return Error{"OpenGL: line shader: " + line.error()};
+    auto tonemap = gl::Program::create(gl::shaders::FULLSCREEN_VERTEX, gl::shaders::TONEMAP_FRAGMENT);
+    if (!tonemap)
+        return Error{"OpenGL: tone mapping shader: " + tonemap.error()};
+
+    auto impl = std::make_unique<Impl>(std::move(*mesh), std::move(*shadow), std::move(*ssaa), std::move(*fxaa), std::move(*sky), std::move(*overlay), std::move(*line), std::move(*tonemap));
     impl->driver = std::string(version) + " / " + (renderer ? renderer : "unknown");
     impl->resize(width, height);
-    Logger::logger().info("OpenGL rasterizer on {}", impl->driver);
+    log(LogLevel::Info, "OpenGL rasterizer on {}", impl->driver);
     return std::unique_ptr<HardwareRasterizer>(new HardwareRasterizer(std::move(impl)));
 }
 
@@ -692,17 +1196,81 @@ std::uint32_t k3::HardwareRasterizer::height() const noexcept
     return m_impl->height;
 }
 
+void k3::HardwareRasterizer::setRenderScale(float scale)
+{
+    scale = std::clamp(scale, 0.05f, 1.f);
+    if (scale == m_impl->renderScale)
+        return;
+    m_impl->renderScale = scale;
+    m_impl->resize(m_impl->width, m_impl->height);
+}
+
+float k3::HardwareRasterizer::renderScale() const noexcept
+{
+    return m_impl->renderScale;
+}
+
+void k3::HardwareRasterizer::setAntiAliasing(AntiAliasing mode)
+{
+    if (mode == m_impl->antiAliasing)
+        return;
+    m_impl->antiAliasing = mode;
+    m_impl->resize(m_impl->width, m_impl->height);
+}
+
+k3::AntiAliasing k3::HardwareRasterizer::antiAliasing() const noexcept
+{
+    return m_impl->antiAliasing;
+}
+
 void k3::HardwareRasterizer::beginFrame(const Camera& camera, const Environment& environment)
 {
     auto& impl = *m_impl;
     const float aspect = impl.height ? static_cast<float>(impl.width) / impl.height : 1.f;
 
+    // Floating-point targets are only allocated while a tone mapping is asked for.
+    if ((environment.toneMapping != ToneMapping::None) != impl.hdr) {
+        impl.hdr = !impl.hdr;
+        impl.resize(impl.width, impl.height);
+    }
     impl.camera = camera;
     impl.environment = environment;
     impl.view = camera.view();
     impl.viewProjection = camera.projectionMatrix(aspect) * impl.view;
+    impl.layerCameras = {camera};
+    impl.layerStarts = {0};
     impl.commands.clear();
+    impl.lines.clear();
+    impl.overlays.clear();
     impl.stats = {};
+}
+
+void k3::HardwareRasterizer::beginLayer(const Camera& camera)
+{
+    m_impl->layerCameras.push_back(camera);
+    m_impl->layerStarts.push_back(m_impl->commands.size());
+}
+
+void k3::HardwareRasterizer::drawInstances(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material> material, std::span<const Math::Matrix4> transforms)
+{
+    if (!mesh || transforms.empty())
+        return;
+
+    auto& impl = *m_impl;
+    const bool blended = material && material->alphaMode == AlphaMode::Blend;       // Blended draws are sorted one by one
+    const bool mirrored = std::any_of(transforms.begin(), transforms.end(), [](const Math::Matrix4& t) { return handedness(t) < 0.f; });
+
+    impl.stats.drawCalls += transforms.size();
+    impl.stats.triangles += transforms.size() * mesh->triangleCount();
+    if (blended || mirrored) {
+        for (const Math::Matrix4& transform : transforms)
+            impl.commands.push_back({mesh, material, transform});
+        return;
+    }
+
+    DrawCommand command{std::move(mesh), std::move(material), transforms.front()};
+    command.instances.assign(transforms.begin(), transforms.end());
+    impl.commands.push_back(std::move(command));
 }
 
 void k3::HardwareRasterizer::draw(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material> material, const Math::Matrix4& transform)
@@ -714,6 +1282,17 @@ void k3::HardwareRasterizer::draw(std::shared_ptr<const Mesh> mesh, std::shared_
     m_impl->commands.push_back({std::move(mesh), std::move(material), transform});
 }
 
+void k3::HardwareRasterizer::drawLines(std::span<const DebugLine> lines, bool depthTested)
+{
+    for (const DebugLine& line : lines)
+        m_impl->lines.push_back({line, depthTested, m_impl->layerStarts.size() - 1});
+}
+
+void k3::HardwareRasterizer::draw2D(std::shared_ptr<Texture> texture, const Rect& destination, const Rect& source, const Math::Color& tint)
+{
+    m_impl->overlays.push_back({std::move(texture), destination, source, tint});
+}
+
 void k3::HardwareRasterizer::endFrame()
 {
     auto& impl = *m_impl;
@@ -721,33 +1300,80 @@ void k3::HardwareRasterizer::endFrame()
 
     if (!impl.fbo) {
         impl.commands.clear();
+        impl.lines.clear();
+        impl.overlays.clear();
         return;
     }
 
-    for (DrawCommand& command : impl.commands) {
-        command.gpu = &impl.meshFor(command.mesh);
-        command.bounds = command.gpu->bounds.transformed(command.transform);
+    // Each layer is drawn in turn into the same target. The first renders the shadow maps (from its own
+    // draws) and the sky; the others look through their own camera over a cleared depth buffer.
+    std::vector<DrawCommand> recorded = std::move(impl.commands);
+    std::vector<ShadowCascade> cascades;
+    int shadowLight = -1;
+    const float aspect = impl.height ? static_cast<float>(impl.width) / static_cast<float>(impl.height) : 1.f;
+
+    for (std::size_t layer = 0; layer < impl.layerStarts.size(); ++layer) {
+        const std::size_t first = impl.layerStarts[layer];
+        const std::size_t last = layer + 1 < impl.layerStarts.size() ? impl.layerStarts[layer + 1] : recorded.size();
+
+        impl.commands.assign(std::make_move_iterator(recorded.begin() + static_cast<std::ptrdiff_t>(first)), std::make_move_iterator(recorded.begin() + static_cast<std::ptrdiff_t>(last)));
+        impl.camera = impl.layerCameras[layer];
+        impl.view = impl.camera.view();
+        impl.viewProjection = impl.camera.projectionMatrix(aspect) * impl.view;
+
+        const Frustum frustum(impl.viewProjection);
+
+        for (DrawCommand& command : impl.commands) {
+            command.gpu = &impl.meshFor(command.mesh);
+            if (command.instances.empty()) {
+                command.bounds = command.gpu->bounds.transformed(command.transform);
+                command.visible = frustum.intersects(command.bounds);
+                impl.stats.culledDraws += !command.visible;
+                continue;
+            }
+
+            // Instanced: the bounds cover every placement (the shadow passes want them all), the main pass
+            // draws the ones in view.
+            command.bounds = {};
+            command.visibleInstances.clear();
+            for (const Math::Matrix4& placement : command.instances) {
+                const Math::Bounds3f bounds = command.gpu->bounds.transformed(placement);
+
+                command.bounds.merge(bounds);
+                if (frustum.intersects(bounds))
+                    command.visibleInstances.push_back(placement);
+            }
+            command.visible = !command.visibleInstances.empty();
+            impl.stats.culledDraws += command.instances.size() - command.visibleInstances.size();
+        }
+
+        // Same ordering as the software backend: opaque in submission order, blended farthest first.
+        const auto isBlended = [](const DrawCommand& c) { return materialOf(c).alphaMode == AlphaMode::Blend; };
+        const auto firstBlended = std::stable_partition(impl.commands.begin(), impl.commands.end(), [&](const DrawCommand& c) { return !isBlended(c); });
+        for (auto it = firstBlended; it != impl.commands.end(); ++it)
+            it->viewDepth = -impl.view.transformPoint(it->bounds.center()).z;
+        std::stable_sort(firstBlended, impl.commands.end(), [](const DrawCommand& a, const DrawCommand& b) { return a.viewDepth > b.viewDepth; });
+        const auto blendedStart = static_cast<std::size_t>(firstBlended - impl.commands.begin());
+
+        const sw::ShadingContext lights = sw::ShadingContext::prepare(impl.camera, impl.environment);
+
+        if (layer == 0)
+            shadowLight = impl.renderShadows(lights, blendedStart, cascades);
+        gl::UseProgram(impl.mesh.id());
+        impl.setFrameUniforms(lights, shadowLight, cascades);
+        impl.renderMain(blendedStart, layer == 0);
+        impl.drawDebugLines(layer);
     }
-
-    // Same ordering as the software backend: opaque in submission order, blended farthest first.
-    const auto isBlended = [](const DrawCommand& c) { return materialOf(c).alphaMode == AlphaMode::Blend; };
-    const auto firstBlended = std::stable_partition(impl.commands.begin(), impl.commands.end(), [&](const DrawCommand& c) { return !isBlended(c); });
-    for (auto it = firstBlended; it != impl.commands.end(); ++it)
-        it->viewDepth = -impl.view.transformPoint(it->bounds.center()).z;
-    std::stable_sort(firstBlended, impl.commands.end(), [](const DrawCommand& a, const DrawCommand& b) { return a.viewDepth > b.viewDepth; });
-    const auto blendedStart = static_cast<std::size_t>(firstBlended - impl.commands.begin());
-
-    const sw::ShadingContext lights = sw::ShadingContext::prepare(impl.camera, impl.environment);
-    ShadowProjection projection{Math::Matrix4::identity(), 0.f};
-    const int shadowLight = impl.renderShadows(lights, blendedStart, projection);
-
-    gl::UseProgram(impl.mesh.id());
-    impl.setFrameUniforms(lights, shadowLight, projection);
-    impl.renderMain(blendedStart);
+    impl.toneMap();
+    impl.antiAlias();
+    impl.upscale();
+    impl.drawOverlays();
     impl.present();
     impl.restoreState();
 
     impl.commands.clear();
+    impl.lines.clear();
+    impl.overlays.clear();
     impl.collectGarbage();
     impl.stats.frameMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
@@ -764,7 +1390,7 @@ k3::Image k3::HardwareRasterizer::readPixels()
     image.height = impl.height;
     image.pixels.resize(static_cast<std::size_t>(impl.width) * impl.height * 4);
 
-    gl::BindFramebuffer(gl::READ_FRAMEBUFFER, impl.fbo);
+    gl::BindFramebuffer(gl::READ_FRAMEBUFFER, impl.finalFbo());
     gl::ReadBuffer(gl::COLOR_ATTACHMENT0);
     gl::PixelStorei(gl::PACK_ALIGNMENT, 1);
     gl::ReadPixels(0, 0, static_cast<gl::GLsizei>(impl.width), static_cast<gl::GLsizei>(impl.height), gl::RGBA, gl::UNSIGNED_BYTE, image.pixels.data());

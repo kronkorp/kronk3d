@@ -1,13 +1,19 @@
-#include "SoftwareRasterizer.hpp"
+#include <kronk3d/render/software/SoftwareRasterizer.hpp>
 #include "Clipper.hpp"
 #include "Pipeline.hpp"
+#include "PostProcess.hpp"
+#include "Sampling.hpp"
 #include "Shading.hpp"
 #include "ThreadPool.hpp"
+#include "render/CubeMap.hpp"
+#include "render/Frustum.hpp"
 #include "render/ShadowFit.hpp"
+#include "render/ToneMap.hpp"
 #include "utils/Srgb.hpp"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <unordered_map>
 #include <utility>
 
 namespace
@@ -28,6 +34,14 @@ namespace
         k3::Math::Matrix4                   transform;
         k3::Math::Bounds3f                  bounds{};           // World space, computed in endFrame()
         float                               viewDepth = 0.f;    // Blended draws are sorted on it
+        bool                                visible = true;     // In the camera frustum: shadow passes ignore it
+    };
+
+    struct Overlay
+    {
+        std::shared_ptr<k3::Texture> texture;
+        k3::Rect                     destination, source;
+        k3::Math::Color              tint;
     };
 
     const k3::Material& defaultMaterial()
@@ -53,7 +67,15 @@ namespace
     {
         k3::Math::Matrix4 model;
         k3::Math::Matrix4 normal;
+        float             handedness;   // -1 when the model matrix mirrors
     };
+
+    float handedness(const k3::Math::Matrix4& m)
+    {
+        const float* v = m.values;
+        const float det = v[0] * (v[5] * v[10] - v[6] * v[9]) - v[1] * (v[4] * v[10] - v[6] * v[8]) + v[2] * (v[4] * v[9] - v[5] * v[8]);
+        return det < 0.f ? -1.f : 1.f;
+    }
 
     struct VertexJob
     {
@@ -67,6 +89,13 @@ namespace
         Faces         faces;
         bool          blended;
         std::size_t   first, last;          // Index range, multiple of 3
+    };
+
+    // Pixel bounds of a triangle, stored apart so binning streams 16 bytes per triangle instead of the
+    // whole triangle.
+    struct TriangleBounds
+    {
+        std::int32_t minX, minY, maxX, maxY;
     };
 
     // Triangles overlapping a tile, in submission order.
@@ -86,6 +115,7 @@ namespace
         std::vector<VertexJob>                       vertexJobs;
         std::vector<GeometryJob>                     geometryJobs;
         std::vector<std::vector<k3::sw::Triangle>>   jobTriangles;  // Output of each geometry job (stable during the frame)
+        std::vector<std::vector<TriangleBounds>>     jobBounds;     // Same order as jobTriangles
         std::vector<TileBin>                         bins;
 
         void setSize(std::uint32_t w, std::uint32_t h)
@@ -130,6 +160,9 @@ namespace
     }
 
     // Calls fn(x, y, edges) for every pixel of `t` inside the [x0, x1] x [y0, y1] rectangle.
+    //
+    // Rather than testing every pixel of the bounding box (mostly empty for long thin triangles), each
+    // row solves E_i(x) >= 0 for x: edge functions are affine, so the covered pixels form one exact span.
     template<typename Fn>
     void forEachCoveredPixel(const k3::sw::Triangle& t, std::int32_t x0, std::int32_t y0, std::int32_t x1, std::int32_t y1, Fn&& fn)
     {
@@ -146,20 +179,42 @@ namespace
         const std::int64_t stepY[3] = {t.edgeB[0] * k3::sw::SUBPIXEL_ONE, t.edgeB[1] * k3::sw::SUBPIXEL_ONE, t.edgeB[2] * k3::sw::SUBPIXEL_ONE};
 
         for (std::int32_t y = ys; y <= ye; ++y) {
-            std::int64_t e[3] = {row[0], row[1], row[2]};
+            // Offsets from xs of the first and last covered pixels.
+            std::int64_t first = 0, last = xe - xs;
 
-            for (std::int32_t x = xs; x <= xe; ++x) {
-                // Inside when no edge function is negative: a single sign-bit test.
-                if ((e[0] | e[1] | e[2]) >= 0)
-                    fn(x, y, e);
-                e[0] += stepX[0];
-                e[1] += stepX[1];
-                e[2] += stepX[2];
+            for (int i = 0; i < 3 && first <= last; ++i) {
+                if (stepX[i] > 0) {
+                    // Increasing edge: covered from the first x where it becomes >= 0.
+                    if (row[i] < 0)
+                        first = std::max(first, (-row[i] + stepX[i] - 1) / stepX[i]);
+                } else if (stepX[i] < 0) {
+                    // Decreasing edge: covered until it becomes < 0.
+                    last = row[i] < 0 ? -1 : std::min(last, row[i] / -stepX[i]);
+                } else if (row[i] < 0) {
+                    last = -1;
+                }
+            }
+
+            if (first <= last) {
+                std::int64_t e[3] = {row[0] + first * stepX[0], row[1] + first * stepX[1], row[2] + first * stepX[2]};
+
+                for (std::int64_t x = xs + first; x <= xs + last; ++x) {
+                    fn(static_cast<std::int32_t>(x), y, e);
+                    e[0] += stepX[0];
+                    e[1] += stepX[1];
+                    e[2] += stepX[2];
+                }
             }
             row[0] += stepY[0];
             row[1] += stepY[1];
             row[2] += stepY[2];
         }
+    }
+
+    // Round half away from zero, inline (std::llround is an out-of-line libm call).
+    std::int64_t roundToInt(float value) noexcept
+    {
+        return static_cast<std::int64_t>(value + (value >= 0.f ? 0.5f : -0.5f));
     }
 
 }
@@ -170,32 +225,314 @@ struct k3::SoftwareRasterizer::Impl
 
     sw::ThreadPool pool;
 
-    std::vector<Math::Color>          color;
+    AntiAliasing                      antiAliasing = AntiAliasing::None;
+    std::uint32_t                     outputWidth = 0, outputHeight = 0;
+    float                             renderScale = 1.f;
+    std::uint32_t                     sceneWidth = 0, sceneHeight = 0;      // What the scene renders at (before supersampling)
+    std::vector<Math::Color>          upscaled;         // The output frame, when the scene renders smaller than it
+    std::vector<Math::Color>          output;           // Anti-aliased frame (color is the frame itself without AA)
+    std::vector<Math::Color>          color;            // Render resolution (twice the output's with SSAA)
     std::vector<float>                depth;
     std::vector<const sw::Triangle*>  visibility;       // Nearest opaque triangle of each pixel
-    std::vector<float>                shadowDepth;
+    std::vector<std::vector<float>>   shadowDepths;     // One per cascade
+    std::vector<float>*               shadowTarget = nullptr;   // Cascade being rendered
 
     Camera             camera{};
     Environment        environment{};
     Math::Matrix4      view = Math::Matrix4::identity();
     sw::ShadingContext shading{};
 
+    // The sky behind the geometry: camera axes in world space and the extent of the view plane at distance 1.
+    struct SkyView
+    {
+        bool           active = false;
+        bool           orthographic = false;
+        Math::Vector3f right, up, back;
+        float          tanX = 0.f, tanY = 0.f;
+    } sky;
+
     // Frame data, indexed by draw (position in `commands` once sorted).
     std::vector<DrawCommand>    commands;
+    std::vector<Overlay>        overlays;
+    struct Line
+    {
+        DebugLine   line;
+        bool        depthTested;
+        std::size_t layer;
+    };
+    std::vector<Line>           lines;              // Debug lines, drawn after the geometry of their layer
+    std::vector<Camera>         layerCameras;       // Of each layer, the frame's own first
+    std::vector<std::size_t>    layerStarts;        // Index in `commands` where each layer's draws begin
+    bool                        clearBackground = true;     // Only the first layer starts from the clear color / the sky
     std::vector<sw::DrawState>  drawStates;
     std::vector<DrawTransforms> transforms;
 
     Pass mainPass;
     Pass shadowPass;
 
+    // Local bounds of every mesh drawn recently: computing them walks all the vertices, so it is done
+    // once per mesh, not once per frame. Meshes are only read again when their revision changes.
+    struct CachedBounds
+    {
+        std::weak_ptr<const Mesh> source;
+        std::uint64_t             revision = 0;
+        Math::Bounds3f            bounds{};
+        bool                      valid = false;
+    };
+    std::unordered_map<const Mesh*, CachedBounds> boundsCache;     // Node addresses are stable
+    std::vector<CachedBounds*>                    boundsToCompute;
+    std::vector<const CachedBounds*>              drawBounds;          // Per draw
+
     FrameStats stats{};
+
+    [[nodiscard]] bool scaled() const noexcept
+    {
+        return sceneWidth != outputWidth || sceneHeight != outputHeight;
+    }
 
     void resize(std::uint32_t w, std::uint32_t h)
     {
-        mainPass.setSize(w, h);
-        color.assign(static_cast<std::size_t>(w) * h, Math::Color::Black);
-        depth.assign(static_cast<std::size_t>(w) * h, 1.f);
-        visibility.assign(static_cast<std::size_t>(w) * h, nullptr);
+        const std::uint32_t scale = antiAliasing == AntiAliasing::SSAA ? 2 : 1;
+
+        outputWidth = w;
+        outputHeight = h;
+        sceneWidth = w ? std::max<std::uint32_t>(1, static_cast<std::uint32_t>(std::lround(static_cast<float>(w) * renderScale))) : 0;
+        sceneHeight = h ? std::max<std::uint32_t>(1, static_cast<std::uint32_t>(std::lround(static_cast<float>(h) * renderScale))) : 0;
+
+        const std::size_t renderPixels = static_cast<std::size_t>(sceneWidth) * scale * sceneHeight * scale;
+
+        mainPass.setSize(sceneWidth * scale, sceneHeight * scale);
+        color.assign(renderPixels, Math::Color::Black);
+        depth.assign(renderPixels, 1.f);
+        visibility.assign(renderPixels, nullptr);
+        output.assign(antiAliasing == AntiAliasing::None ? 0 : static_cast<std::size_t>(sceneWidth) * sceneHeight, Math::Color::Black);
+        upscaled.assign(scaled() ? static_cast<std::size_t>(w) * h : 0, Math::Color::Black);
+    }
+
+    [[nodiscard]] const std::vector<Math::Color>& finalColor() const noexcept
+    {
+        return scaled() ? upscaled : antiAliasing == AntiAliasing::None ? color : output;
+    }
+
+    // A shaded color as it is stored: clamped, or kept in high dynamic range for the tone mapping to bring back.
+    [[nodiscard]] Math::Color finish(const Math::Color& c) const noexcept
+    {
+        if (environment.toneMapping == ToneMapping::None)
+            return saturate(c);
+        return {std::max(c.r, 0.f), std::max(c.g, 0.f), std::max(c.b, 0.f), std::clamp(c.a, 0.f, 1.f)};
+    }
+
+    // Brings the scene from high dynamic range to [0, 1], before anti-aliasing (which wants displayable colors).
+    void toneMap()
+    {
+        if (environment.toneMapping == ToneMapping::None)
+            return;
+
+        const ToneMapping mode = environment.toneMapping;
+        const float exposure = environment.exposure;
+        const std::size_t width = mainPass.width;
+
+        pool.parallelFor(mainPass.height, [&](std::size_t y) {
+            for (std::size_t x = 0; x < width; ++x) {
+                Math::Color& c = color[y * width + x];
+
+                c.r = k3::toneMap(mode, c.r, exposure);
+                c.g = k3::toneMap(mode, c.g, exposure);
+                c.b = k3::toneMap(mode, c.b, exposure);
+            }
+        });
+    }
+
+    // The frame at the scene's size: the render itself, or its anti-aliased version.
+    void antiAlias()
+    {
+        if (antiAliasing == AntiAliasing::SSAA)
+            sw::downsample2x2(color, sceneWidth, sceneHeight, output, pool);
+        else if (antiAliasing == AntiAliasing::FXAA)
+            sw::fxaa(color, sceneWidth, sceneHeight, output, pool);
+    }
+
+    // Enlarges the frame to the output size without filtering (each output pixel reads the scene pixel it falls in).
+    void upscale()
+    {
+        if (!scaled())
+            return;
+
+        const std::vector<Math::Color>& source = antiAliasing == AntiAliasing::None ? color : output;
+
+        pool.parallelFor(outputHeight, [&](std::size_t y) {
+            const std::size_t sourceRow = (2 * y + 1) * sceneHeight / (2 * static_cast<std::size_t>(outputHeight));
+
+            for (std::size_t x = 0; x < outputWidth; ++x)
+                upscaled[y * outputWidth + x] = source[sourceRow * sceneWidth + (2 * x + 1) * sceneWidth / (2 * static_cast<std::size_t>(outputWidth))];
+        });
+    }
+
+    // What the 2D overlay is drawn on.
+    [[nodiscard]] std::vector<Math::Color>& finalFrame() noexcept
+    {
+        return scaled() ? upscaled : antiAliasing == AntiAliasing::None ? color : output;
+    }
+
+    // Looks through `layerCamera`: view, projection and what depends on them.
+    void useCamera(const Camera& layerCamera)
+    {
+        const float aspect = outputHeight ? static_cast<float>(outputWidth) / static_cast<float>(outputHeight) : 1.f;
+
+        camera = layerCamera;
+        view = layerCamera.view();
+        mainPass.viewProjection = layerCamera.projectionMatrix(aspect) * view;
+    }
+
+    /* Debug lines: one pixel wide, drawn over the layer's geometry */
+
+    // Clips the segment to the view volume in clip space; false when nothing is left.
+    static bool clipSegment(Math::Vector4f& a, Math::Vector4f& b) noexcept
+    {
+        float t0 = 0.f, t1 = 1.f;
+
+        for (int plane = 0; plane < 6; ++plane) {
+            const float sign = (plane & 1) ? -1.f : 1.f;        // w + c >= 0, then w - c >= 0
+            const auto coordinate = [&](const Math::Vector4f& p) { return plane < 2 ? p.x : plane < 4 ? p.y : p.z; };
+            const float da = a.w + sign * coordinate(a), db = b.w + sign * coordinate(b);
+
+            if (da < 0.f && db < 0.f)
+                return false;
+            if (da < 0.f)
+                t0 = std::max(t0, da / (da - db));
+            else if (db < 0.f)
+                t1 = std::min(t1, da / (da - db));
+        }
+        if (t0 > t1)
+            return false;
+
+        const Math::Vector4f from = a, direction = b - a;
+
+        a = from + t0 * direction;
+        b = from + t1 * direction;
+        return true;
+    }
+
+    void drawLines(std::size_t layer)
+    {
+        constexpr float DEPTH_BIAS = 5e-5f;     // Lines on a surface (the edges of a box) win against it
+        const auto width = static_cast<float>(mainPass.width), height = static_cast<float>(mainPass.height);
+
+        for (const Line& entry : lines) {
+            if (entry.layer != layer)
+                continue;
+
+            Math::Vector4f a = mainPass.viewProjection * Math::Vector4f{entry.line.from.x, entry.line.from.y, entry.line.from.z, 1.f};
+            Math::Vector4f b = mainPass.viewProjection * Math::Vector4f{entry.line.to.x, entry.line.to.y, entry.line.to.z, 1.f};
+
+            if (!clipSegment(a, b))
+                continue;
+
+            // To pixels (y down) and depth in [0, 1].
+            const float x0 = (a.x / a.w * 0.5f + 0.5f) * width, y0 = (0.5f - a.y / a.w * 0.5f) * height, z0 = a.z / a.w * 0.5f + 0.5f;
+            const float x1 = (b.x / b.w * 0.5f + 0.5f) * width, y1 = (0.5f - b.y / b.w * 0.5f) * height, z1 = b.z / b.w * 0.5f + 0.5f;
+            const float steps = std::ceil(std::max(std::abs(x1 - x0), std::abs(y1 - y0)));
+            const Math::Color& c = entry.line.color;
+
+            for (float i = 0.f; i < steps; i += 1.f) {
+                const float t = i / steps;
+                const auto x = static_cast<std::int32_t>(std::floor(x0 + (x1 - x0) * t));
+                const auto y = static_cast<std::int32_t>(std::floor(y0 + (y1 - y0) * t));
+
+                if (x < 0 || y < 0 || x >= static_cast<std::int32_t>(mainPass.width) || y >= static_cast<std::int32_t>(mainPass.height))
+                    continue;
+
+                const std::size_t index = static_cast<std::size_t>(y) * mainPass.width + static_cast<std::size_t>(x);
+
+                if (entry.depthTested && z0 + (z1 - z0) * t - DEPTH_BIAS > depth[index])
+                    continue;
+                Math::Color& target = color[index];
+
+                target = {c.r * c.a + target.r * (1.f - c.a), c.g * c.a + target.g * (1.f - c.a), c.b * c.a + target.b * (1.f - c.a), c.a + target.a * (1.f - c.a)};
+            }
+        }
+    }
+
+    /* Sky */
+
+    void prepareSky(float aspect)
+    {
+        const Skybox& skybox = environment.skybox;
+        const float* v = view.values;
+
+        sky.active = skybox.valid();
+        sky.orthographic = camera.projection == Projection::Orthographic;
+        sky.right = {v[0], v[1], v[2]};
+        sky.up = {v[4], v[5], v[6]};
+        sky.back = {v[8], v[9], v[10]};
+        sky.tanY = std::tan(camera.fovY * 0.5f);
+        sky.tanX = sky.tanY * aspect;
+    }
+
+    // Color of the sky at a pixel of the render target.
+    [[nodiscard]] Math::Color skyAt(std::int32_t x, std::int32_t y) const
+    {
+        const float nx = (static_cast<float>(x) + 0.5f) / static_cast<float>(mainPass.width) * 2.f - 1.f;
+        const float ny = 1.f - (static_cast<float>(y) + 0.5f) / static_cast<float>(mainPass.height) * 2.f;
+        const Math::Vector3f direction = sky.orthographic ? -1.f * sky.back : (nx * sky.tanX) * sky.right + (ny * sky.tanY) * sky.up - sky.back;
+        const cube::Lookup hit = cube::lookup(direction);
+        const Texture* face = environment.skybox.faces[static_cast<std::size_t>(hit.face)].get();
+
+        // Clamp to the edge texel of the face, like a GL cube map: no wrapping onto the opposite side.
+        const float margin = 0.5f / static_cast<float>(face->width());
+        const float s = std::clamp(hit.s, margin, 1.f - margin), t = std::clamp(hit.t, margin, 1.f - margin);
+        Math::Color c = sw::sampleTexture(face, {s, t}, {0.f, 0.f}, {0.f, 0.f}) * environment.skybox.tint;
+
+        c.a = 1.f;
+        return c;
+    }
+
+    /* 2D overlay: alpha-blended over the finished frame, in submission order */
+
+    void drawOverlays()
+    {
+        std::vector<Math::Color>& frame = finalFrame();
+        const auto width = static_cast<int>(outputWidth), height = static_cast<int>(outputHeight);
+
+        for (const Overlay& overlay : overlays) {
+            const Rect& to = overlay.destination;
+            const Texture* texture = overlay.texture && !overlay.texture->image().empty() ? overlay.texture.get() : nullptr;
+
+            if (!(to.width > 0.f && to.height > 0.f))
+                continue;
+
+            Rect from = overlay.source;
+            if (texture && (from.width == 0.f || from.height == 0.f))
+                from = {0.f, 0.f, static_cast<float>(texture->width()), static_cast<float>(texture->height())};
+            const float textureWidth = texture ? static_cast<float>(texture->width()) : 1.f;
+            const float textureHeight = texture ? static_cast<float>(texture->height()) : 1.f;
+            const Math::Vector2f duvdx{from.width / (to.width * textureWidth), 0.f};
+            const Math::Vector2f duvdy{0.f, from.height / (to.height * textureHeight)};
+
+            // The pixels whose centre is inside the rectangle.
+            const int x0 = std::max(0, static_cast<int>(std::ceil(to.x - 0.5f))), x1 = std::min(width, static_cast<int>(std::ceil(to.x + to.width - 0.5f)));
+            const int y0 = std::max(0, static_cast<int>(std::ceil(to.y - 0.5f))), y1 = std::min(height, static_cast<int>(std::ceil(to.y + to.height - 0.5f)));
+
+            if (x0 >= x1 || y0 >= y1)
+                continue;
+            pool.parallelFor(static_cast<std::size_t>(y1 - y0), [&](std::size_t row) {
+                const int y = y0 + static_cast<int>(row);
+                const float v = (from.y + (static_cast<float>(y) + 0.5f - to.y) / to.height * from.height) / textureHeight;
+
+                for (int x = x0; x < x1; ++x) {
+                    const float u = (from.x + (static_cast<float>(x) + 0.5f - to.x) / to.width * from.width) / textureWidth;
+                    const Math::Color source = sw::sampleTexture(texture, {u, v}, duvdx, duvdy) * overlay.tint;
+                    Math::Color& target = frame[static_cast<std::size_t>(y) * outputWidth + static_cast<std::size_t>(x)];
+
+                    target = {
+                        source.r * source.a + target.r * (1.f - source.a),
+                        source.g * source.a + target.g * (1.f - source.a),
+                        source.b * source.a + target.b * (1.f - source.a),
+                        source.a + target.a * (1.f - source.a),
+                    };
+                }
+            });
+        }
     }
 
     /* Frame planning (sequential) */
@@ -208,8 +545,9 @@ struct k3::SoftwareRasterizer::Impl
             const Mesh& mesh = *command.mesh;
             const Material& material = command.material ? *command.material : defaultMaterial();
 
-            drawStates.push_back({&material, material.alphaMode == AlphaMode::Mask, mesh.hasNormals(), mesh.hasColors()});
-            transforms.push_back({command.transform, command.transform.normalMatrix()});
+            const bool normalMapped = material.normalMap && mesh.hasNormals() && mesh.hasUVs() && mesh.hasTangents();
+            drawStates.push_back({&material, material.alphaMode == AlphaMode::Mask, mesh.hasNormals() && !material.flatShading, mesh.hasColors(), normalMapped});
+            transforms.push_back({command.transform, command.transform.normalMatrix(), handedness(command.transform)});
         }
     }
 
@@ -235,13 +573,19 @@ struct k3::SoftwareRasterizer::Impl
     void planMainPass(std::size_t firstBlended)
     {
         mainPass.begin(commands.size());
-        for (std::size_t d = 0; d < commands.size(); ++d)
-            addVertices(mainPass, d);
-        for (std::size_t d = 0; d < firstBlended; ++d)
-            addGeometry(mainPass, d, drawStates[d].material->doubleSided ? Faces::All : Faces::Front, false);
+        for (std::size_t d = 0; d < commands.size(); ++d) {
+            if (commands[d].visible)
+                addVertices(mainPass, d);
+        }
+        for (std::size_t d = 0; d < firstBlended; ++d) {
+            if (commands[d].visible)
+                addGeometry(mainPass, d, drawStates[d].material->doubleSided ? Faces::All : Faces::Front, false);
+        }
         // A double-sided blended mesh (a glass box) shows its inside through its outside: draw the faces
         // turned away from the camera first, so they end up behind whatever the triangle order is.
         for (std::size_t d = firstBlended; d < commands.size(); ++d) {
+            if (!commands[d].visible)
+                continue;
             if (drawStates[d].material->doubleSided)
                 addGeometry(mainPass, d, Faces::Back, true);
             addGeometry(mainPass, d, Faces::Front, true);
@@ -264,16 +608,24 @@ struct k3::SoftwareRasterizer::Impl
 
     void runGeometry(Pass& pass)
     {
-        if (pass.jobTriangles.size() < pass.geometryJobs.size())
+        if (pass.jobTriangles.size() < pass.geometryJobs.size()) {
             pass.jobTriangles.resize(pass.geometryJobs.size());
-        for (std::size_t j = 0; j < pass.geometryJobs.size(); ++j)
+            pass.jobBounds.resize(pass.geometryJobs.size());
+        }
+        for (std::size_t j = 0; j < pass.geometryJobs.size(); ++j) {
             pass.jobTriangles[j].clear();
+            pass.jobBounds[j].clear();
+        }
 
         pool.parallelFor(pass.vertexJobs.size(), [&](std::size_t j) {
             transformVertices(pass, pass.vertexJobs[j]);
         });
         pool.parallelFor(pass.geometryJobs.size(), [&](std::size_t j) {
             assemble(pass, pass.geometryJobs[j], pass.jobTriangles[j]);
+
+            pass.jobBounds[j].reserve(pass.jobTriangles[j].size());
+            for (const sw::Triangle& t : pass.jobTriangles[j])
+                pass.jobBounds[j].push_back({t.minX, t.minY, t.maxX, t.maxY});
         });
         bin(pass);
     }
@@ -308,6 +660,18 @@ struct k3::SoftwareRasterizer::Impl
             v.varyings[sw::ColorG] = c.g;
             v.varyings[sw::ColorB] = c.b;
             v.varyings[sw::ColorA] = c.a;
+
+            if (state.normalMapped) {
+                const auto& t = mesh.tangents[i];
+                const auto tangent = m.model.transformDirection({t.x, t.y, t.z});
+                v.varyings[sw::TangentX] = tangent.x;
+                v.varyings[sw::TangentY] = tangent.y;
+                v.varyings[sw::TangentZ] = tangent.z;
+                // A mirroring transform flips the frame's handedness.
+                v.varyings[sw::TangentW] = t.w * m.handedness;
+            } else {
+                v.varyings[sw::TangentX] = v.varyings[sw::TangentY] = v.varyings[sw::TangentZ] = v.varyings[sw::TangentW] = 0.f;
+            }
         }
     }
 
@@ -363,8 +727,8 @@ struct k3::SoftwareRasterizer::Impl
         for (int i = 0; i < 3; ++i) {
             const auto& p = in[i]->position;
             invW[i] = 1.f / p.w;
-            x[i] = std::llround((p.x * invW[i] * 0.5f + 0.5f) * pass.width * sw::SUBPIXEL_ONE);
-            y[i] = std::llround((0.5f - p.y * invW[i] * 0.5f) * pass.height * sw::SUBPIXEL_ONE);
+            x[i] = roundToInt((p.x * invW[i] * 0.5f + 0.5f) * pass.width * sw::SUBPIXEL_ONE);
+            y[i] = roundToInt((0.5f - p.y * invW[i] * 0.5f) * pass.height * sw::SUBPIXEL_ONE);
             z[i] = p.z * invW[i] * 0.5f + 0.5f;
         }
 
@@ -435,26 +799,79 @@ struct k3::SoftwareRasterizer::Impl
         out.push_back(t);
     }
 
-    // Sequential, walking the jobs in drawing order: bins keep the submission order blending relies on.
-    static void bin(Pass& pass)
+    // Each worker fills one row of tiles, walking the jobs in drawing order: bins keep the submission
+    // order blending relies on, and no two workers write to the same bin.
+    void bin(Pass& pass)
     {
-        for (auto& tile : pass.bins) {
-            tile.opaque.clear();
-            tile.blended.clear();
-        }
+        pool.parallelFor(pass.tilesY, [&](std::size_t tileRow) {
+            const auto ty = static_cast<std::int32_t>(tileRow);
+            const std::int32_t rowTop = ty * TILE_SIZE, rowBottom = rowTop + TILE_SIZE - 1;
+            TileBin* row = &pass.bins[tileRow * pass.tilesX];
 
-        for (std::size_t j = 0; j < pass.geometryJobs.size(); ++j) {
-            const bool blended = pass.geometryJobs[j].blended;
+            for (std::uint32_t tx = 0; tx < pass.tilesX; ++tx) {
+                row[tx].opaque.clear();
+                row[tx].blended.clear();
+            }
 
-            for (const sw::Triangle& t : pass.jobTriangles[j]) {
-                for (std::int32_t ty = t.minY / TILE_SIZE; ty <= t.maxY / TILE_SIZE; ++ty) {
-                    for (std::int32_t tx = t.minX / TILE_SIZE; tx <= t.maxX / TILE_SIZE; ++tx) {
-                        TileBin& tile = pass.bins[static_cast<std::size_t>(ty) * pass.tilesX + tx];
-                        (blended ? tile.blended : tile.opaque).push_back(&t);
-                    }
+            for (std::size_t j = 0; j < pass.geometryJobs.size(); ++j) {
+                const bool blended = pass.geometryJobs[j].blended;
+                const auto& bounds = pass.jobBounds[j];
+                const sw::Triangle* triangles = pass.jobTriangles[j].data();
+
+                for (std::size_t k = 0; k < bounds.size(); ++k) {
+                    const TriangleBounds& b = bounds[k];
+
+                    if (b.maxY < rowTop || b.minY > rowBottom)
+                        continue;
+                    for (std::int32_t tx = b.minX / TILE_SIZE; tx <= b.maxX / TILE_SIZE; ++tx)
+                        (blended ? row[tx].blended : row[tx].opaque).push_back(triangles + k);
                 }
             }
+        });
+    }
+
+    /* Bounds */
+
+    void computeBounds()
+    {
+        boundsToCompute.clear();
+        drawBounds.clear();
+        for (const DrawCommand& command : commands) {
+            CachedBounds& cached = boundsCache[command.mesh.get()];
+
+            drawBounds.push_back(&cached);
+
+            // Stale entry: its mesh is gone and this one reuses the address, or it was edited in place.
+            const std::uint64_t revision = command.mesh->revision;
+
+            if (cached.valid && (cached.source.expired() || cached.revision != revision))
+                cached.valid = false;
+            if (!cached.valid && (cached.revision != revision || cached.source.lock() != command.mesh)) {
+                cached.source = command.mesh;
+                cached.revision = revision;
+                boundsToCompute.push_back(&cached);
+            }
         }
+
+        pool.parallelFor(boundsToCompute.size(), [&](std::size_t i) {
+            CachedBounds& cached = *boundsToCompute[i];
+            cached.bounds = cached.source.lock()->bounds();
+            cached.valid = true;
+        });
+        const Frustum frustum(mainPass.viewProjection);
+
+        pool.parallelFor(commands.size(), [&](std::size_t d) {
+            DrawCommand& command = commands[d];
+            command.bounds = drawBounds[d]->bounds.transformed(command.transform);
+            command.visible = frustum.intersects(command.bounds);
+        });
+        for (const DrawCommand& command : commands)
+            stats.culledDraws += !command.visible;
+    }
+
+    void collectBounds()
+    {
+        std::erase_if(boundsCache, [](const auto& entry) { return entry.second.source.expired(); });
     }
 
     /* Shadows */
@@ -464,37 +881,45 @@ struct k3::SoftwareRasterizer::Impl
     {
         const ShadowSettings& settings = environment.shadows;
 
-        shading.shadow = {};
+        shading.shadow = sw::ShadowMap{};
         if (shading.shadowLight < 0 || settings.resolution == 0)
             return;
 
-        Math::Bounds3f bounds = settings.bounds;
-        if (bounds.empty())
-            for (const DrawCommand& command : commands)
-                bounds.merge(command.bounds);
+        Math::Bounds3f sceneBounds;
+        for (const DrawCommand& command : commands)
+            sceneBounds.merge(command.bounds);
 
-        const auto projection = fitShadowProjection(bounds, shading.lights[shading.shadowLight].direction);
-        if (!projection)
-            return;
-
-        shadowPass.viewProjection = projection->viewProjection;
-        shadowPass.setSize(settings.resolution, settings.resolution);
-        shadowDepth.resize(static_cast<std::size_t>(settings.resolution) * settings.resolution);
+        const float aspect = outputHeight ? static_cast<float>(outputWidth) / outputHeight : 1.f;
+        const auto cascades = fitShadowCascades(settings, camera, aspect, sceneBounds, shading.lights[shading.shadowLight].direction);
 
         planShadowPass(firstBlended);
-        if (shadowPass.geometryJobs.empty())
+        if (cascades.empty() || shadowPass.geometryJobs.empty())
             return;
-        runGeometry(shadowPass);
-        pool.parallelFor(shadowPass.tileCount(), [&](std::size_t tile) { renderShadowTile(tile); });
 
-        shading.shadow = {
-            shadowDepth.data(),
-            settings.resolution,
-            shadowPass.viewProjection,
-            settings.depthBias,
-            settings.normalBias * 2.f * projection->radius / static_cast<float>(settings.resolution),
-            std::max(settings.pcfRadius, 0),
-        };
+        sw::ShadowMap& shadow = shading.shadow;
+        shadowPass.setSize(settings.resolution, settings.resolution);
+        shadowDepths.resize(cascades.size());
+
+        for (std::size_t i = 0; i < cascades.size(); ++i) {
+            shadowDepths[i].resize(static_cast<std::size_t>(settings.resolution) * settings.resolution);
+            shadowTarget = &shadowDepths[i];
+            shadowPass.viewProjection = cascades[i].viewProjection;
+            runGeometry(shadowPass);
+            pool.parallelFor(shadowPass.tileCount(), [&](std::size_t tile) { renderShadowTile(tile); });
+
+            shadow.cascades[i] = {
+                shadowDepths[i].data(),
+                cascades[i].viewProjection,
+                settings.normalBias * cascades[i].texelSize,
+                cascades[i].splitDistance,
+            };
+        }
+        shadow.count = cascades.size();
+        shadow.size = settings.resolution;
+        shadow.depthBias = settings.depthBias;
+        shadow.pcfRadius = std::max(settings.pcfRadius, 0);
+        shadow.cameraPosition = camera.position;
+        shadow.cameraForward = camera.forward();
     }
 
     void renderShadowTile(std::size_t tile)
@@ -505,7 +930,7 @@ struct k3::SoftwareRasterizer::Impl
         const std::uint32_t size = shadowPass.width;
         for (std::int32_t y = y0; y <= y1; ++y) {
             const std::size_t row = static_cast<std::size_t>(y) * size;
-            std::fill(shadowDepth.begin() + row + x0, shadowDepth.begin() + row + x1 + 1, 1.f);
+            std::fill(shadowTarget->begin() + row + x0, shadowTarget->begin() + row + x1 + 1, 1.f);
         }
 
         for (const sw::Triangle* triangle : shadowPass.bins[tile].opaque) {
@@ -513,7 +938,7 @@ struct k3::SoftwareRasterizer::Impl
             const sw::DrawState& state = drawStates[t.draw];
 
             forEachCoveredPixel(t, x0, y0, x1, y1, [&](std::int32_t x, std::int32_t y, const std::int64_t e[3]) {
-                float& stored = shadowDepth[static_cast<std::size_t>(y) * size + x];
+                float& stored = (*shadowTarget)[static_cast<std::size_t>(y) * size + x];
                 const float z = depthAt(t, e);
 
                 if (!(z < stored))
@@ -540,12 +965,26 @@ struct k3::SoftwareRasterizer::Impl
         l1 *= inv;
         l2 *= inv;
 
-        const bool hasColors = drawStates[t.draw].hasColors;
-        const int count = hasColors ? sw::VARYING_COUNT : sw::ColorR;
+        const sw::DrawState& state = drawStates[t.draw];
         float v[sw::VARYING_COUNT];
 
-        for (int k = 0; k < count; ++k)
-            v[k] = l0 * t.varyings[0][k] + l1 * t.varyings[1][k] + l2 * t.varyings[2][k];
+        auto interpolate = [&](int first, int last) {
+            for (int k = first; k < last; ++k)
+                v[k] = l0 * t.varyings[0][k] + l1 * t.varyings[1][k] + l2 * t.varyings[2][k];
+        };
+        interpolate(0, sw::ColorR);
+
+        Math::Color vertexColor = Math::Color::White;
+        if (state.hasColors) {
+            interpolate(sw::ColorR, sw::TangentX);
+            vertexColor = {v[sw::ColorR], v[sw::ColorG], v[sw::ColorB], v[sw::ColorA]};
+        }
+
+        Math::Vector4f tangent{};
+        if (state.normalMapped) {
+            interpolate(sw::TangentX, sw::VARYING_COUNT);
+            tangent = {v[sw::TangentX], v[sw::TangentY], v[sw::TangentZ], v[sw::TangentW]};
+        }
 
         const float u = v[sw::TexU], tv = v[sw::TexV];
 
@@ -555,7 +994,8 @@ struct k3::SoftwareRasterizer::Impl
             {u, tv},
             {(t.uStep[0] - u * t.qStep[0]) * inv, (t.vStep[0] - tv * t.qStep[0]) * inv},
             {(t.uStep[1] - u * t.qStep[1]) * inv, (t.vStep[1] - tv * t.qStep[1]) * inv},
-            hasColors ? Math::Color{v[sw::ColorR], v[sw::ColorG], v[sw::ColorB], v[sw::ColorA]} : Math::Color::White,
+            vertexColor,
+            tangent,
             t.frontFacing,
         };
     }
@@ -574,7 +1014,8 @@ struct k3::SoftwareRasterizer::Impl
         const std::uint32_t width = mainPass.width;
         for (std::int32_t y = y0; y <= y1; ++y) {
             const std::size_t row = static_cast<std::size_t>(y) * width;
-            std::fill(color.begin() + row + x0, color.begin() + row + x1 + 1, environment.clearColor);
+            if (clearBackground)
+                std::fill(color.begin() + row + x0, color.begin() + row + x1 + 1, environment.clearColor);
             std::fill(depth.begin() + row + x0, depth.begin() + row + x1 + 1, 1.f);
             std::fill(visibility.begin() + row + x0, visibility.begin() + row + x1 + 1, nullptr);
         }
@@ -605,13 +1046,16 @@ struct k3::SoftwareRasterizer::Impl
                 const std::size_t index = static_cast<std::size_t>(y) * width + x;
                 const sw::Triangle* t = visibility[index];
 
-                if (!t)
+                if (!t) {
+                    if (sky.active)
+                        color[index] = skyAt(x, y);
                     continue;
+                }
 
                 std::int64_t e[3];
                 t->edgesAt(x, y, e);
 
-                Math::Color c = saturate(sw::shade(shading, *drawStates[t->draw].material, fragmentAt(*t, e)));
+                Math::Color c = finish(sw::shade(shading, *drawStates[t->draw].material, fragmentAt(*t, e)));
                 c.a = 1.f;
                 color[index] = c;
             }
@@ -628,7 +1072,7 @@ struct k3::SoftwareRasterizer::Impl
                 if (!(depthAt(t, e) < depth[index]))
                     return;
 
-                const Math::Color src = saturate(sw::shade(shading, material, fragmentAt(t, e)));
+                const Math::Color src = finish(sw::shade(shading, material, fragmentAt(t, e)));
                 const float a = src.a;
                 Math::Color& dst = color[index];
 
@@ -656,12 +1100,39 @@ void k3::SoftwareRasterizer::resize(std::uint32_t width, std::uint32_t height)
 
 std::uint32_t k3::SoftwareRasterizer::width() const noexcept
 {
-    return m_impl->mainPass.width;
+    return m_impl->outputWidth;
 }
 
 std::uint32_t k3::SoftwareRasterizer::height() const noexcept
 {
-    return m_impl->mainPass.height;
+    return m_impl->outputHeight;
+}
+
+void k3::SoftwareRasterizer::setRenderScale(float scale)
+{
+    scale = std::clamp(scale, 0.05f, 1.f);
+    if (scale == m_impl->renderScale)
+        return;
+    m_impl->renderScale = scale;
+    m_impl->resize(m_impl->outputWidth, m_impl->outputHeight);
+}
+
+float k3::SoftwareRasterizer::renderScale() const noexcept
+{
+    return m_impl->renderScale;
+}
+
+void k3::SoftwareRasterizer::setAntiAliasing(AntiAliasing mode)
+{
+    if (mode == m_impl->antiAliasing)
+        return;
+    m_impl->antiAliasing = mode;
+    m_impl->resize(m_impl->outputWidth, m_impl->outputHeight);
+}
+
+k3::AntiAliasing k3::SoftwareRasterizer::antiAliasing() const noexcept
+{
+    return m_impl->antiAliasing;
 }
 
 unsigned k3::SoftwareRasterizer::threadCount() const noexcept
@@ -672,15 +1143,24 @@ unsigned k3::SoftwareRasterizer::threadCount() const noexcept
 void k3::SoftwareRasterizer::beginFrame(const Camera& camera, const Environment& environment)
 {
     auto& impl = *m_impl;
-    const float aspect = impl.mainPass.height ? static_cast<float>(impl.mainPass.width) / impl.mainPass.height : 1.f;
+    const float aspect = impl.outputHeight ? static_cast<float>(impl.outputWidth) / impl.outputHeight : 1.f;
 
-    impl.camera = camera;
     impl.environment = environment;
-    impl.view = camera.view();
-    impl.mainPass.viewProjection = camera.projectionMatrix(aspect) * impl.view;
+    impl.useCamera(camera);
     impl.shading = sw::ShadingContext::prepare(camera, environment);
+    impl.prepareSky(aspect);
+    impl.layerCameras = {camera};
+    impl.layerStarts = {0};
     impl.commands.clear();
+    impl.lines.clear();
+    impl.overlays.clear();
     impl.stats = {};
+}
+
+void k3::SoftwareRasterizer::beginLayer(const Camera& camera)
+{
+    m_impl->layerCameras.push_back(camera);
+    m_impl->layerStarts.push_back(m_impl->commands.size());
 }
 
 void k3::SoftwareRasterizer::draw(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material> material, const Math::Matrix4& transform)
@@ -692,51 +1172,89 @@ void k3::SoftwareRasterizer::draw(std::shared_ptr<const Mesh> mesh, std::shared_
     m_impl->commands.push_back({std::move(mesh), std::move(material), transform});
 }
 
+void k3::SoftwareRasterizer::drawLines(std::span<const DebugLine> lines, bool depthTested)
+{
+    for (const DebugLine& line : lines)
+        m_impl->lines.push_back({line, depthTested, m_impl->layerStarts.size() - 1});
+}
+
+void k3::SoftwareRasterizer::draw2D(std::shared_ptr<Texture> texture, const Rect& destination, const Rect& source, const Math::Color& tint)
+{
+    m_impl->overlays.push_back({std::move(texture), destination, source, tint});
+}
+
 void k3::SoftwareRasterizer::endFrame()
 {
     auto& impl = *m_impl;
     const auto start = std::chrono::steady_clock::now();
+    std::vector<DrawCommand> recorded = std::move(impl.commands);
 
-    impl.pool.parallelFor(impl.commands.size(), [&](std::size_t d) {
-        DrawCommand& command = impl.commands[d];
-        command.bounds = command.mesh->bounds().transformed(command.transform);
-    });
+    // Each layer goes through the whole pipeline in turn, over the colors of the previous one. Only the first
+    // renders the shadow maps (from its own draws) and shows the sky; the others look through their own
+    // camera, with a depth buffer of their own.
+    for (std::size_t layer = 0; layer < impl.layerStarts.size(); ++layer) {
+        const std::size_t first = impl.layerStarts[layer];
+        const std::size_t last = layer + 1 < impl.layerStarts.size() ? impl.layerStarts[layer + 1] : recorded.size();
 
-    // Opaque and alpha-tested draws keep their order, blended ones go last, farthest first.
-    const auto firstBlended = std::stable_partition(impl.commands.begin(), impl.commands.end(), [](const DrawCommand& c) { return !isBlended(c); });
-    for (auto it = firstBlended; it != impl.commands.end(); ++it)
-        it->viewDepth = -impl.view.transformPoint(it->bounds.center()).z;
-    std::stable_sort(firstBlended, impl.commands.end(), [](const DrawCommand& a, const DrawCommand& b) { return a.viewDepth > b.viewDepth; });
+        impl.commands.assign(std::make_move_iterator(recorded.begin() + static_cast<std::ptrdiff_t>(first)), std::make_move_iterator(recorded.begin() + static_cast<std::ptrdiff_t>(last)));
+        if (layer > 0) {
+            sw::ShadowMap shadow = std::move(impl.shading.shadow);
 
-    const auto blendedStart = static_cast<std::size_t>(firstBlended - impl.commands.begin());
+            impl.useCamera(impl.layerCameras[layer]);
+            impl.shading = sw::ShadingContext::prepare(impl.camera, impl.environment);
+            impl.shading.shadow = std::move(shadow);
+            impl.sky.active = false;
+            impl.clearBackground = false;
+        }
+        impl.computeBounds();
 
-    impl.prepareDraws();
-    impl.renderShadows(blendedStart);
-    impl.planMainPass(blendedStart);
-    impl.runGeometry(impl.mainPass);
-    impl.pool.parallelFor(impl.mainPass.tileCount(), [&](std::size_t tile) { impl.renderTile(tile); });
+        // Opaque and alpha-tested draws keep their order, blended ones go last, farthest first.
+        const auto firstBlended = std::stable_partition(impl.commands.begin(), impl.commands.end(), [](const DrawCommand& c) { return !isBlended(c); });
+        for (auto it = firstBlended; it != impl.commands.end(); ++it)
+            it->viewDepth = -impl.view.transformPoint(it->bounds.center()).z;
+        std::stable_sort(firstBlended, impl.commands.end(), [](const DrawCommand& a, const DrawCommand& b) { return a.viewDepth > b.viewDepth; });
+
+        const auto blendedStart = static_cast<std::size_t>(firstBlended - impl.commands.begin());
+
+        impl.prepareDraws();
+        if (layer == 0)
+            impl.renderShadows(blendedStart);
+        impl.planMainPass(blendedStart);
+        impl.runGeometry(impl.mainPass);
+        impl.pool.parallelFor(impl.mainPass.tileCount(), [&](std::size_t tile) { impl.renderTile(tile); });
+        impl.drawLines(layer);
+    }
+    impl.toneMap();
+    impl.antiAlias();
+    impl.upscale();
+    impl.drawOverlays();
 
     // Draw states point into the recorded materials: drop both together.
     impl.drawStates.clear();
     impl.commands.clear();
-    impl.shading.shadow = {};
+    impl.lines.clear();
+    impl.overlays.clear();
+    impl.clearBackground = true;
+    impl.shading.shadow = sw::ShadowMap{};
+    impl.collectBounds();
     impl.stats.frameMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
 
 k3::Image k3::SoftwareRasterizer::readPixels()
 {
     auto& impl = *m_impl;
-    const std::uint32_t width = impl.mainPass.width;
+    const std::uint32_t width = impl.outputWidth;
+    const std::vector<Math::Color>& frame = impl.finalColor();
     Image image;
 
     image.width = width;
-    image.height = impl.mainPass.height;
-    image.pixels.resize(impl.color.size() * 4);
+    image.height = impl.outputHeight;
+    image.pixels.resize(frame.size() * 4);
 
     const std::uint8_t* encode = srgb::encodeTable();
     impl.pool.parallelFor(image.height, [&](std::size_t y) {
         for (std::size_t i = y * width; i < (y + 1) * width; ++i) {
-            const Math::Color& c = impl.color[i];
+            const Math::Color& c = frame[i];
 
             image.pixels[i * 4 + 0] = srgb::encode(c.r, encode);
             image.pixels[i * 4 + 1] = srgb::encode(c.g, encode);
@@ -754,5 +1272,5 @@ const k3::FrameStats& k3::SoftwareRasterizer::stats() const noexcept
 
 const std::vector<k3::Math::Color>& k3::SoftwareRasterizer::colorBuffer() const noexcept
 {
-    return m_impl->color;
+    return m_impl->finalColor();
 }

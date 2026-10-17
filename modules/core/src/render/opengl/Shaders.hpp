@@ -15,6 +15,7 @@ namespace k3::gl::shaders
     inline constexpr unsigned NORMAL   = 1;
     inline constexpr unsigned UV       = 2;
     inline constexpr unsigned COLOR    = 3;
+    inline constexpr unsigned TANGENT  = 4;
 
     inline constexpr const char* MESH_VERTEX = R"glsl(
 #version 330 core
@@ -22,24 +23,33 @@ layout(location = 0) in vec3 aPosition;
 layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUV;
 layout(location = 3) in vec4 aColor;
+layout(location = 4) in vec4 aTangent;
+layout(location = 8) in mat4 aInstanceModel;      // Locations 8 to 11, one per instance (IRasterizer::drawInstances)
 
-uniform mat4 uViewProjection;
-uniform mat4 uModel;
-uniform mat4 uNormalMatrix;
+uniform mat4  uViewProjection;
+uniform mat4  uModel;
+uniform mat4  uNormalMatrix;
+uniform float uHandedness;
+uniform bool  uInstanced;
 
 out vec3 vWorld;
 out vec3 vNormal;
 out vec2 vUV;
 out vec4 vColor;
+out vec4 vTangent;
 
 void main()
 {
-    vec4 world = uModel * vec4(aPosition, 1.0);
+    mat4 model = uInstanced ? aInstanceModel : uModel;
+    mat3 normalMatrix = uInstanced ? transpose(inverse(mat3(aInstanceModel))) : mat3(uNormalMatrix);
+    vec4 world = model * vec4(aPosition, 1.0);
 
     vWorld = world.xyz / world.w;
-    vNormal = mat3(uNormalMatrix) * aNormal;
+    vNormal = normalMatrix * aNormal;
     vUV = aUV;
     vColor = aColor;
+    // A mirroring transform flips the frame's handedness (instances are never mirrored).
+    vTangent = vec4(mat3(model) * aTangent.xyz, aTangent.w * (uInstanced ? 1.0 : uHandedness));
     gl_Position = uViewProjection * world;
 }
 )glsl";
@@ -50,6 +60,7 @@ in vec3 vWorld;
 in vec3 vNormal;
 in vec2 vUV;
 in vec4 vColor;
+in vec4 vTangent;
 
 out vec4 fragColor;
 
@@ -64,6 +75,9 @@ uniform vec3  uCameraPosition;
 uniform vec3  uViewDirection;
 uniform bool  uOrthographic;
 uniform vec3  uAmbient;
+uniform vec4  uAmbientGround;   // rgb, and a = 1 for a hemisphere light (ambient above, this below)
+uniform vec4  uFogColor;    // rgb, and a = 1 when the fog is on
+uniform vec4  uFog;         // x: density at the camera's altitude, y: height falloff
 uniform int   uLightCount;
 uniform int   uLightType[MAX_LIGHTS];
 uniform vec3  uLightPosition[MAX_LIGHTS];
@@ -74,13 +88,16 @@ uniform float uLightRange[MAX_LIGHTS];
 uniform float uLightCosInner[MAX_LIGHTS];
 uniform float uLightCosOuter[MAX_LIGHTS];
 
-uniform int       uShadowLight;
-uniform sampler2D uShadowMap;
-uniform mat4      uShadowViewProjection;
-uniform int       uShadowSize;
-uniform float     uShadowDepthBias;
-uniform float     uShadowNormalOffset;
-uniform int       uShadowPcfRadius;
+const int MAX_CASCADES = 4;
+uniform int            uShadowLight;
+uniform int            uShadowCascadeCount;
+uniform sampler2DArray uShadowMap;
+uniform mat4           uShadowViewProjection[MAX_CASCADES];
+uniform float          uShadowNormalOffset[MAX_CASCADES];
+uniform float          uShadowSplit[MAX_CASCADES];
+uniform int            uShadowSize;
+uniform float          uShadowDepthBias;
+uniform int            uShadowPcfRadius;
 
 // Draw
 uniform vec4      uDiffuse;
@@ -97,11 +114,20 @@ uniform bool      uHasOpacityMap;
 uniform sampler2D uDiffuseMap;
 uniform sampler2D uSpecularMap;
 uniform sampler2D uOpacityMap;
+uniform bool      uHasNormalMap;
+uniform float     uNormalScale;
+uniform sampler2D uNormalMap;
 
 float shadowVisibility(vec3 position, vec3 normal)
 {
+    // First cascade reaching this view distance (uViewDirection is minus the camera's forward axis).
+    float distance = dot(position - uCameraPosition, -uViewDirection);
+    int cascade = 0;
+    while (cascade + 1 < uShadowCascadeCount && distance > uShadowSplit[cascade])
+        ++cascade;
+
     // The light's projection is orthographic: w = 1, no divide needed.
-    vec4 clip = uShadowViewProjection * vec4(position + normal * uShadowNormalOffset, 1.0);
+    vec4 clip = uShadowViewProjection[cascade] * vec4(position + normal * uShadowNormalOffset[cascade], 1.0);
     float u = clip.x * 0.5 + 0.5;
     float v = 0.5 - clip.y * 0.5;
     float depth = clip.z * 0.5 + 0.5 - uShadowDepthBias;
@@ -119,11 +145,24 @@ float shadowVisibility(vec3 position, vec3 normal)
         for (int dx = -uShadowPcfRadius; dx <= uShadowPcfRadius; ++dx) {
             int x = clamp(cx + dx, 0, uShadowSize - 1);
             // v grows downward, texture rows upward.
-            lit += depth <= texelFetch(uShadowMap, ivec2(x, uShadowSize - 1 - y), 0).r ? 1 : 0;
+            lit += depth <= texelFetch(uShadowMap, ivec3(x, uShadowSize - 1 - y, cascade), 0).r ? 1 : 0;
             ++taps;
         }
     }
     return float(lit) / float(taps);
+}
+
+// Mirrors sw::fogVisibility (render/software/Shading.cpp).
+vec3 applyFog(vec3 color)
+{
+    if (uFogColor.a < 0.5)
+        return color;
+
+    vec3 ray = vWorld - uCameraPosition;
+    float x = clamp(uFog.y * ray.y, -80.0, 80.0);
+    float mean = abs(x) < 1e-3 ? 1.0 - 0.5 * x : (1.0 - exp(-x)) / x;
+
+    return mix(uFogColor.rgb, color, exp(-uFog.x * length(ray) * mean));
 }
 
 void main()
@@ -138,7 +177,7 @@ void main()
 
     float alpha = uAlphaMode == BLEND ? albedo.a : 1.0;
     if (uUnlit) {
-        fragColor = vec4(albedo.rgb, alpha);
+        fragColor = vec4(applyFog(albedo.rgb), alpha);
         return;
     }
 
@@ -153,6 +192,15 @@ void main()
         n = normalize(cross(dFdx(vWorld), dFdy(vWorld)));
     }
 
+    if (uHasNormalMap && vTangent.w != 0.0) {
+        // Tangent frame re-orthogonalized after interpolation; the map's x/y/z go along t/b/n.
+        vec3 t = normalize(vTangent.xyz - n * dot(n, vTangent.xyz));
+        vec3 b = cross(n, t) * (vTangent.w < 0.0 ? -1.0 : 1.0);
+        vec3 m = texture(uNormalMap, vUV).rgb * 2.0 - 1.0;
+
+        n = normalize(t * (m.x * uNormalScale) + b * (m.y * uNormalScale) + n * m.z);
+    }
+
     vec3 v = uOrthographic ? uViewDirection : normalize(uCameraPosition - vWorld);
     vec3 specular = uSpecular;
     if (uHasSpecularMap)
@@ -160,7 +208,11 @@ void main()
     bool hasSpecular = specular.r > 0.0 || specular.g > 0.0 || specular.b > 0.0;
     float shininess = max(uShininess, 1.0);
 
-    vec3 result = uAmbient * albedo.rgb + uEmissive;
+    // Hemisphere light: the ambient color slides from the ground's to the sky's with the normal's height.
+    vec3 ambient = uAmbient;
+    if (uAmbientGround.a > 0.5)
+        ambient = mix(uAmbientGround.rgb, uAmbient, n.y * 0.5 + 0.5);
+    vec3 result = ambient * albedo.rgb + uEmissive;
 
     for (int i = 0; i < uLightCount; ++i) {
         vec3 l = uLightToLight[i];
@@ -199,7 +251,7 @@ void main()
         }
     }
 
-    fragColor = vec4(result, alpha);
+    fragColor = vec4(applyFog(result), alpha);
 }
 )glsl";
 
@@ -209,9 +261,11 @@ void main()
 layout(location = 0) in vec3 aPosition;
 layout(location = 2) in vec2 aUV;
 layout(location = 3) in vec4 aColor;
+layout(location = 8) in mat4 aInstanceModel;
 
 uniform mat4 uViewProjection;
 uniform mat4 uModel;
+uniform bool uInstanced;
 
 out vec2 vUV;
 out float vAlpha;
@@ -220,7 +274,7 @@ void main()
 {
     vUV = aUV;
     vAlpha = aColor.a;
-    gl_Position = uViewProjection * (uModel * vec4(aPosition, 1.0));
+    gl_Position = uViewProjection * ((uInstanced ? aInstanceModel : uModel) * vec4(aPosition, 1.0));
 }
 )glsl";
 
@@ -248,6 +302,202 @@ void main()
         if (alpha < uAlphaCutoff)
             discard;
     }
+}
+)glsl";
+
+    // Full-screen triangle with no vertex buffer, for the anti-aliasing passes.
+    inline constexpr const char* FULLSCREEN_VERTEX = R"glsl(
+#version 330 core
+void main()
+{
+    vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    gl_Position = vec4(position * 2.0 - 1.0, 0.0, 1.0);
+}
+)glsl";
+
+    // SSAA resolve: average of the 2x2 block (sRGB texels are decoded, so the average is in linear space).
+    inline constexpr const char* SSAA_FRAGMENT = R"glsl(
+#version 330 core
+uniform sampler2D uSource;
+out vec4 fragColor;
+
+void main()
+{
+    ivec2 p = ivec2(gl_FragCoord.xy) * 2;
+    fragColor = 0.25 * (texelFetch(uSource, p, 0) + texelFetch(uSource, p + ivec2(1, 0), 0)
+                      + texelFetch(uSource, p + ivec2(0, 1), 0) + texelFetch(uSource, p + ivec2(1, 1), 0));
+}
+)glsl";
+
+    // Tone mapping: the high dynamic range scene to a displayable one, mirroring render/ToneMap.hpp. The target
+    // is sRGB: the encoding happens on write.
+    inline constexpr const char* TONEMAP_FRAGMENT = R"glsl(
+#version 330 core
+uniform sampler2D uSource;
+uniform float uExposure;
+uniform int   uCurve;       // 1 Reinhard, 2 ACES
+out vec4 fragColor;
+
+void main()
+{
+    vec4 hdr = texelFetch(uSource, ivec2(gl_FragCoord.xy), 0);
+    vec3 x = max(hdr.rgb, vec3(0.0)) * uExposure;
+    vec3 mapped;
+
+    if (uCurve == 1)
+        mapped = x / (1.0 + x);
+    else
+        mapped = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+    fragColor = vec4(mapped, clamp(hdr.a, 0.0, 1.0));
+}
+)glsl";
+
+    // FXAA, mirroring render/software/PostProcess.cpp. That code works with y pointing down, OpenGL rows
+    // go up: "up" neighbours and the y of the direction are flipped so both read the same texels.
+    inline constexpr const char* FXAA_FRAGMENT = R"glsl(
+#version 330 core
+uniform sampler2D uSource;
+out vec4 fragColor;
+
+const float SPAN_MAX = 8.0;
+const float REDUCE_MUL = 1.0 / 8.0;
+const float REDUCE_MIN = 1.0 / 128.0;
+
+float luma(vec4 c)
+{
+    return sqrt(dot(c.rgb, vec3(0.299, 0.587, 0.114)));
+}
+
+vec4 at(ivec2 p)
+{
+    return texelFetch(uSource, clamp(p, ivec2(0), textureSize(uSource, 0) - 1), 0);
+}
+
+// Bilinear lookup at an offset (in pixels, y down) from this pixel's center.
+vec4 around(vec2 offset)
+{
+    return texture(uSource, (gl_FragCoord.xy + vec2(offset.x, -offset.y)) / vec2(textureSize(uSource, 0)));
+}
+
+void main()
+{
+    ivec2 p = ivec2(gl_FragCoord.xy);
+    float nw = luma(at(p + ivec2(-1, 1)));
+    float ne = luma(at(p + ivec2(1, 1)));
+    float sw = luma(at(p + ivec2(-1, -1)));
+    float se = luma(at(p + ivec2(1, -1)));
+    vec4 center = at(p);
+    float m = luma(center);
+    float lumaMin = min(m, min(min(nw, ne), min(sw, se)));
+    float lumaMax = max(m, max(max(nw, ne), max(sw, se)));
+
+    vec2 dir = vec2(-((nw + ne) - (sw + se)), (nw + sw) - (ne + se));
+    float reduce = max((nw + ne + sw + se) * (0.25 * REDUCE_MUL), REDUCE_MIN);
+    float scale = 1.0 / (min(abs(dir.x), abs(dir.y)) + reduce);
+    dir = clamp(dir * scale, vec2(-SPAN_MAX), vec2(SPAN_MAX));
+
+    vec4 a = 0.5 * (around(dir * (1.0 / 3.0 - 0.5)) + around(dir * (2.0 / 3.0 - 0.5)));
+    vec4 b = 0.5 * a + 0.25 * (around(dir * -0.5) + around(dir * 0.5));
+    float lumaB = luma(b);
+
+    fragColor = vec4((lumaB < lumaMin || lumaB > lumaMax) ? a.rgb : b.rgb, center.a);
+}
+)glsl";
+
+    // Skybox: a full-screen triangle on the far plane, drawn where nothing was (depth test LEQUAL). The
+    // view ray of each pixel is rebuilt from the camera axes; the cube map is read in OpenGL's own addressing,
+    // which the software backend mirrors (render/CubeMap.hpp).
+    inline constexpr const char* SKY_VERTEX = R"glsl(
+#version 330 core
+void main()
+{
+    vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    gl_Position = vec4(position * 2.0 - 1.0, 1.0, 1.0);
+}
+)glsl";
+
+    inline constexpr const char* SKY_FRAGMENT = R"glsl(
+#version 330 core
+uniform vec3  uRight;
+uniform vec3  uUp;
+uniform vec3  uBack;
+uniform vec4  uView;        // tan(fov / 2) * aspect, tan(fov / 2), orthographic (0 / 1)
+uniform vec4  uViewport;    // Render target size in xy
+uniform vec4  uTint;
+uniform samplerCube uSky;
+out vec4 fragColor;
+
+void main()
+{
+    vec2 ndc = gl_FragCoord.xy / uViewport.xy * 2.0 - 1.0;
+    vec3 direction = uView.z > 0.5 ? -uBack : uRight * (ndc.x * uView.x) + uUp * (ndc.y * uView.y) - uBack;
+
+    fragColor = vec4(texture(uSky, direction).rgb * uTint.rgb, 1.0);
+}
+)glsl";
+
+    // 2D overlay (IRasterizer::draw2D): one rectangle, six vertices from gl_VertexID. The rectangle
+    // (x, y, width, height) is in output pixels, y down; uSource is the texture area (u0, v0, u1, v1).
+    inline constexpr const char* OVERLAY_VERTEX = R"glsl(
+#version 330 core
+uniform vec4 uRect;
+uniform vec4 uSource;
+uniform vec4 uViewport;     // Output size in xy
+out vec2 vUV;
+
+const vec2 CORNERS[6] = vec2[6](vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0), vec2(1.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0));
+
+void main()
+{
+    vec2 corner = CORNERS[gl_VertexID];
+    vec2 pixel = uRect.xy + corner * uRect.zw;
+
+    vUV = mix(uSource.xy, uSource.zw, corner);
+    gl_Position = vec4(pixel.x / uViewport.x * 2.0 - 1.0, 1.0 - pixel.y / uViewport.y * 2.0, 0.0, 1.0);
+}
+)glsl";
+
+    inline constexpr const char* OVERLAY_FRAGMENT = R"glsl(
+#version 330 core
+in vec2 vUV;
+out vec4 fragColor;
+
+uniform sampler2D uImage;
+uniform int  uHasImage;
+uniform vec4 uTint;
+
+void main()
+{
+    fragColor = uHasImage != 0 ? texture(uImage, vUV) * uTint : uTint;
+}
+)glsl";
+
+    // Debug lines (IRasterizer::drawLines): world-space segments with a color per vertex. The depth is
+    // pulled slightly toward the camera so that lines lying on a surface (the edges of a box) win against it.
+    inline constexpr const char* LINE_VERTEX = R"glsl(
+#version 330 core
+layout(location = 0) in vec3 aPosition;
+layout(location = 1) in vec4 aColor;
+
+uniform mat4 uViewProjection;
+out vec4 vColor;
+
+void main()
+{
+    vColor = aColor;
+    gl_Position = uViewProjection * vec4(aPosition, 1.0);
+    gl_Position.z -= 1e-4 * gl_Position.w;
+}
+)glsl";
+
+    inline constexpr const char* LINE_FRAGMENT = R"glsl(
+#version 330 core
+in vec4 vColor;
+out vec4 fragColor;
+
+void main()
+{
+    fragColor = vColor;
 }
 )glsl";
 

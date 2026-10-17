@@ -6,9 +6,9 @@
 */
 #pragma once
 
-#include "Color.hpp"
-#include "Vector.hpp"
-#include "scene/Texture.hpp"
+#include <kronk3d/math/Color.hpp>
+#include <kronk3d/math/Vector.hpp>
+#include <kronk3d/scene/Texture.hpp>
 
 namespace k3::sw
 {

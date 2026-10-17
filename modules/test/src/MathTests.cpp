@@ -1,7 +1,7 @@
 #include "Test.hpp"
-#include "Bounds.hpp"
-#include "Matrix.hpp"
-#include "Vector.hpp"
+#include <kronk3d/math/Bounds.hpp>
+#include <kronk3d/math/Matrix.hpp>
+#include <kronk3d/math/Vector.hpp>
 
 using namespace k3::Math;
 

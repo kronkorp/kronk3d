@@ -11,3 +11,9 @@ compile_commands.json
 
 # Images
 *.bmp
+
+# Logs
+*.log
+
+# Large downloaded assets (tools/bench/download_sponza.sh)
+assets-large/

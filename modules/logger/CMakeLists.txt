@@ -4,14 +4,15 @@ project(kronk3d LANGUAGES CXX)
 ###
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
-file(GLOB_RECURSE SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 
 ###
 
-add_library(logger STATIC ${SOURCES})
-apply_project_settings(logger)
+add_library(kronk3d_logger STATIC ${SOURCES})
+apply_project_settings(kronk3d_logger)
 
 ###
 
-# target_link_libraries(logger PRIVATE api)
-target_include_directories(logger PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src/)
+# XX
+target_include_directories(kronk3d_logger PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/>)
+set_target_properties(kronk3d_logger PROPERTIES EXPORT_NAME logger)

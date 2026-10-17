@@ -1,6 +1,6 @@
 #include "Test.hpp"
-#include "render/software/SoftwareRasterizer.hpp"
-#include "scene/Mesh.hpp"
+#include <kronk3d/render/software/SoftwareRasterizer.hpp>
+#include <kronk3d/scene/Mesh.hpp>
 
 namespace
 {
@@ -244,4 +244,71 @@ K3_TEST(software_double_sided_blended_mesh_draws_back_faces_first)
     // Red (near) over green (far): not green over red.
     K3_CHECK_NEAR(center(rasterizer).r, 0.5f, 1e-6f);
     K3_CHECK_NEAR(center(rasterizer).g, 0.25f, 1e-6f);
+}
+
+K3_TEST(software_redraws_a_mesh_edited_in_place)
+{
+    k3::SoftwareRasterizer rasterizer(SIZE, SIZE);
+    auto mesh = quad(0.f);
+    auto draw = [&] {
+        rasterizer.beginFrame(orthoCamera(), blackEnvironment());
+        rasterizer.draw(mesh, solid(k3::Math::Color::Red), k3::Math::Matrix4::identity());
+        rasterizer.endFrame();
+    };
+
+    for (auto& position : mesh->positions)
+        position.x += 10.f;                             // Out of view: culled, its bounds are cached
+    ++mesh->revision;
+    draw();
+    K3_CHECK(center(rasterizer).r == 0.f);
+
+    for (auto& position : mesh->positions)
+        position.x -= 10.f;
+    ++mesh->revision;
+    draw();
+    K3_CHECK(center(rasterizer).r == 1.f);
+}
+
+K3_TEST(software_skips_draws_outside_the_view)
+{
+    k3::SoftwareRasterizer rasterizer(SIZE, SIZE);
+    auto moved = [](float x, float z) {
+        auto mesh = quad(z);
+        for (auto& position : mesh->positions)
+            position.x += x;
+        return mesh;
+    };
+    auto glass = solid({0.f, 0.f, 1.f, 0.5f}, k3::AlphaMode::Blend);
+
+    rasterizer.beginFrame(orthoCamera(), blackEnvironment());
+    rasterizer.draw(quad(0.f), solid(k3::Math::Color::Red), k3::Math::Matrix4::identity());
+    rasterizer.draw(moved(10.f, 0.f), solid(k3::Math::Color::Green), k3::Math::Matrix4::identity());      // Right of the view
+    rasterizer.draw(moved(0.f, 5.f), solid(k3::Math::Color::Green), k3::Math::Matrix4::identity());       // Behind the camera
+    rasterizer.draw(moved(10.f, 0.1f), glass, k3::Math::Matrix4::identity());                              // Blended, right of the view
+    rasterizer.endFrame();
+
+    K3_CHECK(rasterizer.stats().drawCalls == 4);
+    K3_CHECK(rasterizer.stats().culledDraws == 3);
+    for (const auto& pixel : rasterizer.colorBuffer())
+        K3_REQUIRE(pixel.r == 1.f && pixel.g == 0.f && pixel.b == 0.f);
+}
+
+K3_TEST(software_culled_draws_do_not_change_the_image)
+{
+    auto render = [](bool withOffscreen) {
+        k3::SoftwareRasterizer rasterizer(SIZE, SIZE);
+
+        rasterizer.beginFrame(orthoCamera(), blackEnvironment());
+        rasterizer.draw(quad(0.f), solid(k3::Math::Color::Red), k3::Math::Matrix4::identity());
+        if (withOffscreen)
+            rasterizer.draw(quad(0.f), solid(k3::Math::Color::Green), k3::Math::Matrix4::translate({10.f, 0.f, 0.f}));
+        rasterizer.endFrame();
+        return rasterizer.colorBuffer();
+    };
+    const auto without = render(false);
+    const auto with = render(true);
+
+    K3_REQUIRE(without.size() == with.size());
+    for (std::size_t i = 0; i < with.size(); ++i)
+        K3_REQUIRE(with[i].r == without[i].r && with[i].g == without[i].g);
 }

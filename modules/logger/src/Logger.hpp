@@ -21,16 +21,18 @@ public:
     bool enable(void) const;
     void enable(bool enabled);
 
+    // Console only: writing files is up to the application, e.g.
+    //     Logger::logger().registerHandler(std::make_shared<std::ofstream>("latest.log", std::ios::app));
     static Logger &logger(void)
     {
-        static std::shared_ptr<Logger> logger;
+        // Function-local static: initialized exactly once, even with several threads logging.
+        static const std::shared_ptr<Logger> logger = [] {
+            auto instance = std::make_shared<Logger>();
+            instance->registerHandler(std::make_shared<std::ostream>(std::cout.rdbuf()));
+            instance->setLevel(LoggerLevel::DEBUG);
+            return instance;
+        }();
 
-        if (logger == nullptr) {
-            logger = std::make_shared<Logger>();
-            logger->registerHandler(std::make_shared<std::ofstream>("latest.log", std::ios::app));
-            logger->registerHandler(std::make_shared<std::ostream>(std::cout.rdbuf()));
-            logger->setLevel(LoggerLevel::DEBUG);
-        }
         return *logger;
     }
 

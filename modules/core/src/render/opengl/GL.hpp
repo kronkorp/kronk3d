@@ -6,7 +6,7 @@
 */
 #pragma once
 
-#include "render/IRasterizer.hpp"
+#include <kronk3d/render/IRasterizer.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -41,8 +41,10 @@ namespace k3::gl
     inline constexpr GLenum RENDERER                = 0x1F01;
     inline constexpr GLenum DEPTH_BUFFER_BIT        = 0x00000100;
     inline constexpr GLenum COLOR_BUFFER_BIT        = 0x00004000;
+    inline constexpr GLenum LINES                   = 0x0001;
     inline constexpr GLenum TRIANGLES               = 0x0004;
     inline constexpr GLenum LESS                    = 0x0201;
+    inline constexpr GLenum LEQUAL                  = 0x0203;
     inline constexpr GLenum SRC_ALPHA               = 0x0302;
     inline constexpr GLenum ONE_MINUS_SRC_ALPHA     = 0x0303;
     inline constexpr GLenum ONE                     = 1;
@@ -57,6 +59,9 @@ namespace k3::gl
     inline constexpr GLenum PACK_ALIGNMENT          = 0x0D05;
     inline constexpr GLenum UNPACK_ALIGNMENT        = 0x0CF5;
     inline constexpr GLenum TEXTURE_2D              = 0x0DE1;
+    inline constexpr GLenum TEXTURE_2D_ARRAY        = 0x8C1A;
+    inline constexpr GLenum TEXTURE_CUBE_MAP        = 0x8513;
+    inline constexpr GLenum TEXTURE_CUBE_MAP_POSITIVE_X = 0x8515;
     inline constexpr GLenum UNSIGNED_BYTE           = 0x1401;
     inline constexpr GLenum UNSIGNED_INT            = 0x1405;
     inline constexpr GLenum FLOAT                   = 0x1406;
@@ -73,6 +78,7 @@ namespace k3::gl
     inline constexpr GLenum TEXTURE_MIN_FILTER      = 0x2801;
     inline constexpr GLenum TEXTURE_WRAP_S          = 0x2802;
     inline constexpr GLenum TEXTURE_WRAP_T          = 0x2803;
+    inline constexpr GLenum TEXTURE_WRAP_R          = 0x8072;
     inline constexpr GLenum REPEAT                  = 0x2901;
     inline constexpr GLenum CLAMP_TO_EDGE           = 0x812F;
     inline constexpr GLenum MIRRORED_REPEAT         = 0x8370;
@@ -81,6 +87,7 @@ namespace k3::gl
     inline constexpr GLenum TEXTURE0                = 0x84C0;
     inline constexpr GLenum RGBA8                   = 0x8058;
     inline constexpr GLenum SRGB8_ALPHA8            = 0x8C43;
+    inline constexpr GLenum RGBA16F                 = 0x881A;
     inline constexpr GLenum DEPTH_COMPONENT24       = 0x81A6;
     inline constexpr GLenum DEPTH_COMPONENT32F      = 0x8CAC;
     inline constexpr GLenum TEXTURE_COMPARE_MODE    = 0x884C;
@@ -128,6 +135,7 @@ namespace k3::gl
         X(BindTexture,              void,           (GLenum, GLuint)) \
         X(ActiveTexture,            void,           (GLenum)) \
         X(TexImage2D,               void,           (GLenum, GLint, GLint, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*)) \
+        X(TexImage3D,               void,           (GLenum, GLint, GLint, GLsizei, GLsizei, GLsizei, GLint, GLenum, GLenum, const void*)) \
         X(TexParameteri,            void,           (GLenum, GLenum, GLint)) \
         X(GenBuffers,               void,           (GLsizei, GLuint*)) \
         X(DeleteBuffers,            void,           (GLsizei, const GLuint*)) \
@@ -143,6 +151,8 @@ namespace k3::gl
         X(VertexAttrib4f,           void,           (GLuint, GLfloat, GLfloat, GLfloat, GLfloat)) \
         X(DrawArrays,               void,           (GLenum, GLint, GLsizei)) \
         X(DrawElements,             void,           (GLenum, GLsizei, GLenum, const void*)) \
+        X(DrawElementsInstanced,    void,           (GLenum, GLsizei, GLenum, const void*, GLsizei)) \
+        X(VertexAttribDivisor,      void,           (GLuint, GLuint)) \
         X(CreateShader,             GLuint,         (GLenum)) \
         X(ShaderSource,             void,           (GLuint, GLsizei, const GLchar* const*, const GLint*)) \
         X(CompileShader,            void,           (GLuint)) \
@@ -171,6 +181,7 @@ namespace k3::gl
         X(DeleteFramebuffers,       void,           (GLsizei, const GLuint*)) \
         X(BindFramebuffer,          void,           (GLenum, GLuint)) \
         X(FramebufferTexture2D,     void,           (GLenum, GLenum, GLenum, GLuint, GLint)) \
+        X(FramebufferTextureLayer,  void,           (GLenum, GLenum, GLuint, GLint, GLint)) \
         X(CheckFramebufferStatus,   GLenum,         (GLenum)) \
         X(BlitFramebuffer,          void,           (GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLint, GLbitfield, GLenum)) \
         X(DrawBuffer,               void,           (GLenum)) \

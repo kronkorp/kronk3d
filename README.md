@@ -1,6 +1,6 @@
 # kronk3d
 
-A small C++23 3D rasterization library with two interchangeable backends behind a single interface:
+A small C++20 3D rasterization library with two interchangeable backends behind a single interface:
 
 - **Software**: a multithreaded, tile-based CPU rasterizer that renders into memory and needs no GPU or window.
 - **OpenGL 3.3 core**: renders into the OpenGL context your application already has.
@@ -12,17 +12,32 @@ Both backends produce the same image: the shading code is mirrored, and tests co
 - **Rendering API**
   - A frame is `beginFrame(camera, environment)`, any number of `draw(...)` calls, then `endFrame()`.
   - Backends are created at runtime with `createRasterizer(Backend::Software | Backend::OpenGL)`.
+  - **Layers** (`beginLayer(camera)`): what follows is drawn over the scene with its own camera and a cleared depth buffer, for a first-person weapon with its own field of view that never goes through walls. It shares the lights, the fog and the shadows it receives (it casts none).
+  - **Debug lines** (`drawLine`, `drawBounds`): world-space segments and boxes, depth-tested or always visible, per layer.
+  - **Render scale** (`setRenderScale`, `RasterizerConfig::renderScale`): the scene renders at a fraction of the output size and is enlarged with no filtering, for a low-resolution look or to save fill rate; the 2D overlay stays sharp.
+  - **Billboards** (`BillboardBatch`): camera-facing quads (particles, sparks, smoke) with a position, size, color, rotation and sprite-sheet cell each, sorted and drawn in one call; the arena's torch embers are one.
+  - **Instancing** (`drawInstances`): one mesh at many places, drawn in one call on OpenGL with each instance culled (3000 grass tufts in the arena); 8000 objects cost about 1 ms of CPU instead of 16.
+  - **HDR and tone mapping** (`Environment::toneMapping`, `exposure`): the scene keeps values above 1 (a bright sun, emissive materials) and is mapped to the display range with Reinhard or an ACES filmic curve, before anti-aliasing; off by default. The 2D overlay is not mapped.
+  - **2D overlay** for a HUD or menus, identical on both backends: `drawRect` and `drawImage` (sprite sheets, tint, flipping), in output pixels, drawn over the 3D frame after anti-aliasing.  - Draws outside the camera frustum are skipped by the main pass (`FrameStats::culledDraws`); they still cast shadows.
 - **Assets**
   - Wavefront **OBJ + MTL** loading: polygons with any number of sides, negative indices, vertex colors.
   - Normals are generated when the file has none (smooth, or flat with `s off`).
-  - Material properties `Kd Ks Ke Ns d Tr illum` and textures `map_Kd map_Ks map_d`.
+  - Material properties `Kd Ks Ke Ns d Tr illum` and textures `map_Kd map_Ks map_d norm map_Bump` (bump height maps are converted to normal maps).
+- **Animation**
+  - **glTF 2.0** loading (`.glb` / `.gltf`, what Blender exports): node hierarchy, skins, animation clips, metallic-roughness materials converted to Blinn-Phong, embedded or external textures.
+  - Skeletal animation: translation / rotation / scale channels (step, linear, cubic spline), up to 4 joints per vertex, crossfades between clips.
+  - Skinning runs on the CPU and produces plain meshes, so both backends draw animated characters unchanged.
+- **Skybox**: six images (or `Skybox::gradient(zenith, horizon, ground)`, no asset needed) set on `Environment::skybox`, drawn behind the geometry and under transparency. OpenGL cube-map addressing, so common skybox assets work unchanged; identical on both backends.
+- **Fog**: `Environment::fog`, exponential height fog integrated along each view ray (it pools in low ground and is right with the camera inside it or above); applies to every surface, transparent and unlit ones included. Identical on both backends.
 - **Lighting**
   - Per-pixel Blinn-Phong, computed in linear space with sRGB output.
-  - Ambient, directional, point and spot lights (up to 8).
-  - Shadow maps for a directional light, with PCF soft edges and the alpha test applied to casters.
+  - Normal mapping (tangent space, OpenGL convention), with tangents computed from the uvs.
+  - Ambient, directional, point and spot lights (up to 8). The ambient light can be a **hemisphere** (`Environment::ambientGround`: a sky above, a floor below), and `Material::flatShading` gives the faceted look of low poly.
+  - Cascaded shadow maps for a directional light (stable when the camera moves or turns), with PCF soft edges and the alpha test applied to casters.
 - **Textures**
   - Mipmaps built in linear space for sRGB textures.
   - Nearest / bilinear / trilinear filtering; repeat, mirrored and clamp wrap modes, with OpenGL sampler semantics.
+- **Anti-aliasing**: FXAA (post-process) or SSAA (2x2 supersampling), the same algorithm on both backends.
 - **Transparency**
   - Alpha test (`AlphaMode::Mask`).
   - Alpha blending (`AlphaMode::Blend`), sorted back to front. Double-sided blended meshes draw their back faces first.
@@ -35,7 +50,7 @@ Both backends produce the same image: the shading code is mirrored, and tests co
 
 ## Building
 
-Requirements: CMake 3.20+ and a C++23 compiler (GCC 13+, Clang 18+, or MSVC from Visual Studio 2022 or newer).
+Requirements: CMake 3.20+ and a C++20 compiler (GCC 13+, Clang 18+, or MSVC from Visual Studio 2022 or newer).
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -46,7 +61,7 @@ ctest --test-dir build --output-on-failure
 
 On Windows (Visual Studio), add `--config Release` to the build and `-C Release` to ctest.
 
-The library itself has no dependency: stb_image and stb_image_write are vendored. SFML 2.6 is only used
+The library itself has no dependency: stb_image, stb_image_write and cgltf are vendored. SFML 2.6 is only used
 by the example and the OpenGL tests, to open a window. CMake uses the system SFML when there is one,
 and otherwise downloads and builds it, so nothing has to be installed by hand on Windows.
 
@@ -56,12 +71,31 @@ and otherwise downloads and builds it, so nothing has to be installed by hand on
 | `K3_BUILD_TESTS` | ON when top-level | Builds `kronk3d_tests` |
 | `K3_BUILD_GL_TESTS` | `K3_BUILD_TESTS` | Builds `kronk3d_gl_tests`. These tests skip when no OpenGL 3.3 context is available, unless `K3_REQUIRE_GL` is set |
 
-The CMake targets are `kronk3d_static` and `kronk3d_shared`.
+### Using kronk3d from another project
+
+As a subdirectory (`add_subdirectory(kronk3d)`), or installed with
+`cmake --install build --prefix <dir>`; in both cases, link one of the two flavours:
+
+```cmake
+find_package(kronk3d 0.1 REQUIRED)        # Installed: add <dir> to CMAKE_PREFIX_PATH
+target_link_libraries(app PRIVATE kronk3d::static)      # or kronk3d::shared
+```
+
+### Logs
+
+kronk3d reports problems (a missing texture, an unknown material…) on the console. To redirect or
+silence these messages:
+
+```cpp
+k3::setLogSink([](k3::LogLevel level, std::string_view message) { myLogger.write(level, message); });
+k3::setLogSink(nullptr);                  // Silence
+k3::setLogLevel(k3::LogLevel::Warning);   // Drop Info messages
+```
 
 ## Quick start
 
 ```cpp
-#include "Kronk3d.hpp"
+#include <kronk3d/Kronk3d.hpp>
 
 // Assets
 auto model = k3::ObjLoader::load("assets/spot/spot.obj");     // k3::Result<k3::Model>
@@ -103,39 +137,132 @@ Meshes, materials and textures are passed as `shared_ptr`. The OpenGL backend ca
 and frees it once nothing references it anymore. To change a texture, call `Texture::setImage` (which
 bumps its version); to change a mesh, replace it with a new one.
 
+### Animated characters
+
+Export from Blender with *File > Export > glTF 2.0* (`.glb`, with *Animation* checked): each Blender
+action (Walk, Jump, Idle...) becomes a clip, named after it. Then:
+
+```cpp
+auto loaded = k3::GltfLoader::load("assets/hero.glb");          // k3::Result<k3::AnimatedModel>
+if (!loaded)
+    return std::cerr << loaded.error() << '\n', 1;
+
+k3::Animator hero(std::make_shared<const k3::AnimatedModel>(std::move(*loaded)));
+hero.play("Walk");                                               // Loops by default
+
+// Each frame
+if (jumpPressed)
+    hero.play("Jump", {.loop = false, .fade = 0.1f});            // Crossfades from the current clip
+else if (hero.clip() == "Jump" && hero.finished())
+    hero.play("Walk");
+hero.update(deltaSeconds);
+rasterizer->beginFrame(camera, environment);
+hero.draw(*rasterizer, k3::Math::Matrix4::translate(position));  // Place the character in the world
+rasterizer->endFrame();
+```
+
+`kronk3d_animation_demo [file.glb] [--software]` is a minimal program doing exactly this (keys `1`-`9` pick a clip).
+
+One `Animator` per character on screen; they can share the same `AnimatedModel`. `hero.model().animations`
+lists the clips. Calling `play` with the clip that is already playing does not restart it.
+
+### 2D overlay
+
+```cpp
+rasterizer->beginFrame(camera, environment);
+rasterizer->draw(level, transform);
+rasterizer->drawRect({w / 2 - 1.f, h / 2 - 8.f, 2.f, 16.f}, k3::Math::Color::White);        // Crosshair
+rasterizer->drawImage(atlas, {10.f, h - 74.f, 64.f, 64.f}, {64.f, 0.f, 64.f, 64.f});        // Part of a sprite sheet
+rasterizer->endFrame();
+```
+
+Rectangles are in output pixels (origin top-left, y down), blended in linear space in submission order.
+Textures use their own sampler (`Nearest` for pixel art) and keep their alpha.
+
 ## Example
 
-`kronk3d_example [--backend software|opengl] [--scene 1-4] [--screenshot file.png]`
+`kronk3d_example [--backend software|opengl] [--scene 1-5] [--model file.glb] [--aa none|fxaa|ssaa] [--screenshot file.png]`
 
 | Key | Action |
 |---|---|
-| `1`-`4` | Textured cube, vertex-colored cube, Spot (OBJ), transparency |
+| `1`-`5` | Textured cube, vertex-colored cube, Spot (OBJ), transparency, animated glTF (the Fox, or `--model`) |
+| `E` | Next animation of the glTF model (crossfaded) |
 | `Tab` | Switch between the software and OpenGL backends |
+| `F` | Cycle anti-aliasing: none, FXAA, SSAA |
 | `ZQSD` / `WASD`, `Space`, `Shift` | Move |
 | Arrow keys, right mouse drag | Look around |
+
+### Arena
+
+`kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--scale 0.05-1] [--tone none|reinhard|aces] [--flat] [--bounds] [--first-person] [--screenshot file.png [--seconds S]]`
+
+A third-person showcase: you drive the robot of the Godot 3D platformer demo (`example/assets/robot`,
+MIT) around a stone arena with walls, stairs, 170 crates, torch pillars and a glass panel. It uses the
+sun with cascaded shadows, a gradient skybox, height fog, normal maps, point lights, a transparent
+surface, skeletal animation (`idle`, `walk`, `run`, `jump`, `falling`), frustum culling and the 2D
+overlay (counters drawn with a pixel font, and a minimap).
+
+| Key | Action |
+|---|---|
+| `ZQSD` / `WASD`, `Shift`, `Space` | Move relative to the camera, run, jump |
+| Mouse, arrow keys | Camera |
+| `C` | First person: the weapon is drawn on a layer of its own (own field of view, never through a wall), with a crosshair |
+| `T` | Day, sunset, night |
+| `F` | Fog on / off |
+| `V` | Anti-aliasing: none, FXAA, SSAA |
+| `R` | Render resolution: full, half, quarter (big pixels); the HUD stays sharp |
+| `G` | Flat-shaded (faceted) robot |
+| `M` | Tone mapping: none, ACES, Reinhard |
+| `H` | Hide / show the HUD (frames per second, draw calls, draws culled) |
+| `B` | Collision boxes, drawn as debug lines |
+
+With `--screenshot` a scripted run is rendered and saved; the software backend then needs no window.
+
+## Benchmark
+
+`kronk3d_bench <scene.obj> [--size WxH] [--frames N] [--threads N] [--no-shadows] [--cascades N] [--shadow-resolution N] [--aa none|fxaa|ssaa] [--screenshot prefix]`
+renders an OBJ scene with each backend (OpenGL when a context can be created) and reports load and
+frame times. `tools/bench/download_sponza.sh` fetches Crytek Sponza (262k triangles, 54 textures):
+
+| Sponza, 1280x720, sun shadows (3 cascades of 1024²) + point light, normal maps | Ryzen 7 7745HX (16 threads) / Radeon 610M |
+|---|---|
+| Load (OBJ + MTL + textures + mipmaps) | 0.3 s |
+| Software | 48 ms / frame |
+| OpenGL | 9 ms / frame |
+
+Shadows are the main lever on the software backend: each cascade costs a pass over the shadow
+casters (`ShadowSettings::cascades`, `resolution`).
 
 ## Conventions
 
 - **Coordinates**: right-handed, y up; the camera looks toward -Z. Front faces are counter-clockwise (as in OpenGL and OBJ).
 - **Matrices**: row-major (`Matrix4::values`), column vectors (`M * v`); the depth range is OpenGL's.
 - **UVs**: `(0, 0)` is the top-left of the image. The OBJ loader flips `v` (`ObjLoadOptions::flipV`).
+- **Normal maps**: tangent space, OpenGL convention (green points toward the top of the image), linear color space. Meshes need tangents (`Mesh::computeTangents()`; the OBJ loader computes them when needed). `Texture::normalMapFromHeight` converts height maps.
 - **Colors**: every `Math::Color` is linear. Use `Color::fromSRGB` for colors taken from an image editor. Textures declare their color space (sRGB for colors, linear for masks).
+- **glTF**: loaded as is (right-handed, y up, counter-clockwise faces, `v = 0` at the top). Quaternions are `(x, y, z, w)`. Metallic-roughness maps to Blinn-Phong (`specular = lerp(4%, base color, metallic)`, `shininess = 2 / roughness^4 - 2`); morph targets, emissive / occlusion / metallic-roughness textures and `KHR_texture_transform` are ignored.
 - **Attenuation**: point and spot lights fall off as `(1 - (d / range)^4)^2 / (d^2 + 1)`.
 
 ## Layout
 
 ```
 modules/
-  math/    Vectors, matrices, bounds, colors (header-only)
-  logger/  Logger
-  core/src/
-    scene/     Image, Texture, Mesh, Material, Model, Camera, Light
-    io/        ObjLoader
-    render/    IRasterizer, Environment, ShadowFit
-      software/  SoftwareRasterizer: pipeline, clipper, sampling, shading, thread pool
-      opengl/    HardwareRasterizer, ImagePresenter, GL loader, shaders
+  math/include/kronk3d/math/   Vectors, matrices, bounds, colors (public, header-only)
+  logger/  Logger (internal)
+  core/
+    include/kronk3d/    Public API, installed as <kronk3d/...>. <kronk3d/Kronk3d.hpp> includes it all
+      scene/     Image, Texture, Mesh, Material, Model, Camera, Light, Animation, Animator
+      io/        ObjLoader, GltfLoader
+      render/    IRasterizer, Environment; software/SoftwareRasterizer; opengl/HardwareRasterizer, ImagePresenter
+      utils/     Result
+    src/                Sources and private headers (never installed)
+      render/    ShadowFit
+        software/  Pipeline, clipper, sampling, shading, post-process, thread pool
+        opengl/    GL loader, Program, shaders
   test/
-    src/  CPU unit tests
-    gl/   OpenGL tests (including a pixel comparison with the software backend)
-example/  Interactive demo (SFML window)
+    src/      CPU unit tests (they also see the private headers)
+    gl/       OpenGL tests (including a pixel comparison with the software backend)
+    package/  Consumer of the installed CMake package (CI)
+example/      Interactive demos (SFML window): the scene viewer, a glTF viewer and the third-person arena
+tools/bench/  Benchmark (+ Sponza download script)
 ```

@@ -1,6 +1,6 @@
 #include "Floor.hpp"
-#include "scene/Image.hpp"
-#include "scene/Texture.hpp"
+#include <kronk3d/scene/Image.hpp>
+#include <kronk3d/scene/Texture.hpp>
 #include <cstdint>
 #include <memory>
 

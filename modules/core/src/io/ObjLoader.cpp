@@ -1,7 +1,9 @@
-#include "ObjLoader.hpp"
-#include "Logger.hpp"
+#include <kronk3d/io/ObjLoader.hpp>
+#include "render/software/ThreadPool.hpp"
+#include "utils/Log.hpp"
 #include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <charconv>
 #include <cstdint>
 #include <format>
@@ -147,6 +149,7 @@ namespace
     {
         std::string path;
         bool clamp = false;
+        float bumpMultiplier = 1.f;     // -bm
     };
 
     // "map_Kd -s 1 1 1 -clamp on my texture.png": options first, the rest of the line is the file name.
@@ -168,6 +171,8 @@ namespace
             rest = copy;
             if (option == "-clamp") {
                 statement.clamp = nextToken(rest) == "on";
+            } else if (option == "-bm") {
+                parseFloats(rest, &statement.bumpMultiplier, 1);
             } else if (option == "-o" || option == "-s" || option == "-t") {
                 float ignored[3];
                 parseFloats(rest, ignored, 3);
@@ -180,26 +185,124 @@ namespace
         return statement;
     }
 
+    using TextureSlot = std::shared_ptr<k3::Texture> k3::Material::*;
+
+    enum class TextureKind {
+        Color,      // As is (sRGB)
+        Opacity,    // Normalized to "red channel = opacity" (linear)
+        Normal      // Tangent-space normal map (linear); height maps are converted
+    };
+
+    // Height maps converted to normal maps: rising over the whole height range across 1/64 of the
+    // texture's width tilts the surface by 45 degrees (times -bm), whatever the texture resolution.
+    constexpr float HEIGHT_MAP_SLOPE = 1.f / 64.f;
+
+    // Textures are requested while MTL files are read, then decoded all at once, in parallel (decoding
+    // PNG/JPEG is most of the loading time of a textured scene). Each file is loaded once per usage.
     class TextureCache
     {
         public:
             TextureCache(const k3::ObjLoadOptions& options) : m_options(options) {}
 
-            std::shared_ptr<k3::Texture> get(const std::filesystem::path& path, k3::ColorSpace colorSpace, bool opacity)
+            void request(const std::shared_ptr<k3::Material>& material, TextureSlot slot, const std::filesystem::path& path, TextureKind kind, const TextureStatement& statement)
             {
-                const std::string key = std::format("{}|{}|{}", path.string(), static_cast<int>(colorSpace), opacity);
+                const std::string key = std::format("{}|{}|{}|{}", path.string(), static_cast<int>(kind), statement.clamp, statement.bumpMultiplier);
+                auto [it, inserted] = m_indices.try_emplace(key, m_entries.size());
 
-                if (auto it = m_textures.find(key); it != m_textures.end())
-                    return it->second;
+                if (inserted)
+                    m_entries.push_back({path, kind, statement.clamp, statement.bumpMultiplier});
 
-                auto texture = m_options.loadTexture ? m_options.loadTexture(path, colorSpace) : k3::Texture::load(path, colorSpace);
-                if (texture && opacity)
-                    texture = toOpacityMask(*texture);
-                m_textures.emplace(key, texture);
-                return texture;
+                Entry& entry = m_entries[it->second];
+                if (entry.loaded)
+                    (*material).*slot = entry.texture;
+                else
+                    entry.users.emplace_back(material, slot);
+            }
+
+            // Loads every texture requested since the last call and hands them to their materials.
+            void resolve()
+            {
+                std::vector<Entry*> pending;
+                for (auto& entry : m_entries)
+                    if (!entry.loaded)
+                        pending.push_back(&entry);
+
+                auto load = [&](std::size_t i) { pending[i]->texture = loadOne(*pending[i]); };
+                if (m_options.loadTexture) {
+                    // A user hook may not be thread-safe.
+                    for (std::size_t i = 0; i < pending.size(); ++i)
+                        load(i);
+                } else {
+                    k3::sw::ThreadPool(0).parallelFor(pending.size(), load);
+                }
+
+                for (Entry* entry : pending) {
+                    for (auto& [material, slot] : entry->users)
+                        (*material).*slot = entry->texture;
+                    entry->users.clear();
+                    entry->loaded = true;
+                }
             }
 
         private:
+            struct Entry
+            {
+                std::filesystem::path        path;
+                TextureKind                  kind;
+                bool                         clamp;
+                float                        bumpMultiplier;
+                std::shared_ptr<k3::Texture> texture{};
+                bool                         loaded = false;
+                std::vector<std::pair<std::shared_ptr<k3::Material>, TextureSlot>> users{};
+            };
+
+            std::shared_ptr<k3::Texture> loadOne(const Entry& entry) const
+            {
+                const k3::ColorSpace colorSpace = entry.kind == TextureKind::Color ? k3::ColorSpace::Srgb : k3::ColorSpace::Linear;
+                std::shared_ptr<k3::Texture> texture;
+
+                if (m_options.loadTexture) {
+                    texture = m_options.loadTexture(entry.path, colorSpace);
+                } else if (auto image = k3::Image::load(entry.path)) {
+                    texture = std::make_shared<k3::Texture>(std::move(*image), colorSpace);
+                } else {
+                    k3::log(k3::LogLevel::Error, "Failed to load texture {}", image.error());
+                }
+
+                if (texture && entry.kind == TextureKind::Opacity)
+                    texture = toOpacityMask(*texture);
+                if (texture && entry.kind == TextureKind::Normal)
+                    texture = toNormalMap(*texture, entry.bumpMultiplier);
+                if (texture && entry.clamp) {
+                    // Copy first: a loader hook may share its textures between requests.
+                    texture = std::make_shared<k3::Texture>(*texture);
+                    texture->sampler.wrapU = texture->sampler.wrapV = k3::TextureWrap::ClampToEdge;
+                }
+                return texture;
+            }
+
+            // MTL's bump maps are heights, but many exporters write normal maps there: grey-scale images
+            // are heights (converted), colored ones normal maps. -bm scales the bumpiness of both.
+            static std::shared_ptr<k3::Texture> toNormalMap(const k3::Texture& texture, float bumpMultiplier)
+            {
+                const k3::Image& image = texture.image();
+
+                if (image.isGrayscale())
+                    return k3::Texture::normalMapFromHeight(image, static_cast<float>(image.width) * HEIGHT_MAP_SLOPE * bumpMultiplier);
+
+                k3::Image normals = image;
+                if (bumpMultiplier != 1.f) {
+                    for (std::size_t i = 0; i < normals.pixels.size(); i += 4) {
+                        auto decode = [&](std::size_t c) { return normals.pixels[i + c] / 127.5f - 1.f; };
+                        const auto n = k3::Math::Vector3f::normalize({decode(0) * bumpMultiplier, decode(1) * bumpMultiplier, decode(2)});
+                        normals.pixels[i + 0] = static_cast<std::uint8_t>(std::lround((n.x * 0.5f + 0.5f) * 255.f));
+                        normals.pixels[i + 1] = static_cast<std::uint8_t>(std::lround((n.y * 0.5f + 0.5f) * 255.f));
+                        normals.pixels[i + 2] = static_cast<std::uint8_t>(std::lround((n.z * 0.5f + 0.5f) * 255.f));
+                    }
+                }
+                return std::make_shared<k3::Texture>(std::move(normals), k3::ColorSpace::Linear);
+            }
+
             // map_d is usually a grey-scale image, but some exporters store the mask in the alpha
             // channel instead: normalize to "red channel = opacity".
             static std::shared_ptr<k3::Texture> toOpacityMask(const k3::Texture& texture)
@@ -218,8 +321,9 @@ namespace
                 return result;
             }
 
-            const k3::ObjLoadOptions& m_options;
-            std::unordered_map<std::string, std::shared_ptr<k3::Texture>> m_textures;
+            const k3::ObjLoadOptions&                    m_options;
+            std::vector<Entry>                           m_entries;     // In request order
+            std::unordered_map<std::string, std::size_t> m_indices;
     };
 
     void parseMtl(
@@ -234,18 +338,12 @@ namespace
         std::istringstream lines(source);
         std::string line;
 
-        auto loadMap = [&](std::string_view rest, k3::ColorSpace colorSpace, bool opacity) -> std::shared_ptr<k3::Texture> {
+        auto requestMap = [&](std::string_view rest, TextureSlot slot, TextureKind kind) {
             auto statement = parseTextureStatement(rest);
 
-            if (!options.loadTextures || statement.path.empty())
-                return nullptr;
-
-            auto texture = textures.get(resolvePath(baseDir, statement.path), colorSpace, opacity);
-            if (texture && statement.clamp) {
-                texture = std::make_shared<k3::Texture>(*texture);
-                texture->sampler.wrapU = texture->sampler.wrapV = k3::TextureWrap::ClampToEdge;
-            }
-            return texture;
+            (*current).*slot = nullptr;
+            if (options.loadTextures && !statement.path.empty())
+                textures.request(current, slot, resolvePath(baseDir, statement.path), kind, statement);
         };
 
         while (std::getline(lines, line)) {
@@ -287,11 +385,13 @@ namespace
                 else if (illum == 1)
                     current->specular = {0.f, 0.f, 0.f, 1.f};
             } else if (keyword == "map_Kd") {
-                current->diffuseMap = loadMap(rest, k3::ColorSpace::Srgb, false);
+                requestMap(rest, &k3::Material::diffuseMap, TextureKind::Color);
             } else if (keyword == "map_Ks") {
-                current->specularMap = loadMap(rest, k3::ColorSpace::Srgb, false);
+                requestMap(rest, &k3::Material::specularMap, TextureKind::Color);
             } else if (keyword == "map_d") {
-                current->opacityMap = loadMap(rest, k3::ColorSpace::Linear, true);
+                requestMap(rest, &k3::Material::opacityMap, TextureKind::Opacity);
+            } else if (keyword == "norm" || keyword == "map_Bump" || keyword == "map_bump" || keyword == "bump") {
+                requestMap(rest, &k3::Material::normalMap, TextureKind::Normal);
             }
         }
     }
@@ -316,13 +416,14 @@ namespace
         };
 
         rest = trim(rest);
-        if (tryLoad(rest))
-            return;
-        while (!rest.empty()) {
-            std::string_view name = nextToken(rest);
-            if (!name.empty() && !tryLoad(name))
-                Logger::logger().warn("OBJ: cannot open material library {}", name);
+        if (!tryLoad(rest)) {
+            while (!rest.empty()) {
+                std::string_view name = nextToken(rest);
+                if (!name.empty() && !tryLoad(name))
+                    k3::log(k3::LogLevel::Warning, "OBJ: cannot open material library {}", name);
+            }
         }
+        textures.resolve();
     }
 
     /* OBJ */
@@ -526,7 +627,7 @@ namespace
                     b.material = it->second;
                 } else {
                     if (!materialName.empty())
-                        Logger::logger().warn("OBJ: unknown material {}, using a default one", materialName);
+                        k3::log(k3::LogLevel::Warning, "OBJ: unknown material {}, using a default one", materialName);
                     b.material = std::make_shared<k3::Material>();
                     b.material->name = materialName;
                 }
@@ -563,6 +664,8 @@ namespace
                             b.mesh.colors[index] = m_colors[corner.v];
                     }
 
+                    if (b.material->normalMap)
+                        b.mesh.computeTangents();
                     chooseAlphaMode(*b.material);
                     model.primitives.push_back({
                         std::make_shared<k3::Mesh>(std::move(b.mesh)),
@@ -628,6 +731,6 @@ k3::Result<k3::Model> k3::ObjLoader::load(const std::filesystem::path& path, con
     for (const auto& primitive : model->primitives)
         triangles += primitive.mesh->triangleCount();
     model->name = path.stem().string();
-    Logger::logger().info("Loaded {}: {} primitive(s), {} triangles", path.string(), model->primitives.size(), triangles);
+    log(LogLevel::Info, "Loaded {}: {} primitive(s), {} triangles", path.string(), model->primitives.size(), triangles);
     return model;
 }

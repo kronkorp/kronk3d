@@ -1,5 +1,5 @@
 #include "Srgb.hpp"
-#include "Color.hpp"
+#include <kronk3d/math/Color.hpp>
 #include <cmath>
 #include <vector>
 

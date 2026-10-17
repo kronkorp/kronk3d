@@ -1,6 +1,6 @@
 #include "CubeTextured.hpp"
-#include "Vector.hpp"
-#include "scene/Texture.hpp"
+#include <kronk3d/math/Vector.hpp>
+#include <kronk3d/scene/Texture.hpp>
 #include <cstdint>
 #include <memory>
 #include <iterator>
@@ -107,6 +107,18 @@ k3::Model makeTexturedCube(const std::filesystem::path& texturePath)
     auto material = std::make_shared<k3::Material>();
     material->name = "stone";
     material->diffuseMap = k3::Texture::load(texturePath);
+
+    if (material->diffuseMap) {
+        // No normal map ships with the stone texture: derive one from its brightness, the dark mortar
+        // between the stones being the low parts.
+        k3::Image height = material->diffuseMap->image();
+        for (std::size_t i = 0; i < height.pixels.size(); i += 4) {
+            const auto luminance = static_cast<std::uint8_t>((height.pixels[i] * 54 + height.pixels[i + 1] * 183 + height.pixels[i + 2] * 19) / 256);
+            height.pixels[i] = height.pixels[i + 1] = height.pixels[i + 2] = luminance;
+        }
+        material->normalMap = k3::Texture::normalMapFromHeight(height, 3.f);
+        mesh->computeTangents();
+    }
 
     return k3::Model{"cube", {{mesh, material}}};
 }

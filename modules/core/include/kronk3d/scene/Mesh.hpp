@@ -1,0 +1,73 @@
+/*
+** KRONK CORP, 2026
+** KRONK3D
+** File decription:
+** Mesh struct for rasterizer
+*/
+#pragma once
+
+#include <kronk3d/math/Bounds.hpp>
+#include <kronk3d/math/Color.hpp>
+#include <kronk3d/math/Vector.hpp>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+namespace k3
+{
+
+    // Triangle list. Every attribute but positions is optional: leave it empty,
+    // or give it exactly one entry per position.
+    // Front faces are counter-clockwise (OpenGL / OBJ convention).
+    struct Mesh
+    {
+        std::vector<Math::Vector3f> positions{};
+        std::vector<Math::Vector3f> normals{};
+        std::vector<Math::Vector2f> uvs{};
+        std::vector<Math::Color>    colors{};
+        std::vector<Math::Vector4f> tangents{};  // xyz: direction of +u, w: handedness (+-1). For normal maps
+        // Skinning (see Animator): up to 4 joints per vertex, as indices into the Skin's joint list. The
+        // renderers ignore them: an Animator poses the mesh on the CPU and draws the result.
+        std::vector<std::array<std::uint16_t, 4>> joints{};
+        std::vector<Math::Vector4f>               weights{};     // Sum to 1
+        std::vector<std::uint32_t>  indices{};   // Empty: positions are read three by three
+
+        // Renderers cache per-mesh data (GPU buffers, bounds), so a mesh drawn once is not read again unless
+        // this changes. Bump it after editing the vertex attributes in place; to change the number of
+        // vertices or the indices, build a new Mesh.
+        std::uint64_t revision = 0;
+
+        [[nodiscard]] std::size_t vertexCount() const noexcept { return positions.size(); }
+        [[nodiscard]] std::size_t indexCount() const noexcept { return indices.empty() ? positions.size() : indices.size(); }
+        [[nodiscard]] std::size_t triangleCount() const noexcept { return indexCount() / 3; }
+
+        [[nodiscard]] std::uint32_t index(std::size_t i) const noexcept
+        {
+            return indices.empty() ? static_cast<std::uint32_t>(i) : indices[i];
+        }
+
+        [[nodiscard]] bool hasNormals() const noexcept { return !positions.empty() && normals.size() == positions.size(); }
+        [[nodiscard]] bool hasUVs() const noexcept { return !positions.empty() && uvs.size() == positions.size(); }
+        [[nodiscard]] bool hasColors() const noexcept { return !positions.empty() && colors.size() == positions.size(); }
+        [[nodiscard]] bool hasTangents() const noexcept { return !positions.empty() && tangents.size() == positions.size(); }
+        [[nodiscard]] bool hasSkin() const noexcept
+        {
+            return !positions.empty() && joints.size() == positions.size() && weights.size() == positions.size();
+        }
+
+        // Attribute sizes are consistent and every index is in range.
+        [[nodiscard]] bool valid() const noexcept;
+
+        [[nodiscard]] Math::Bounds3f bounds() const noexcept;
+
+        // Smooth, area-weighted vertex normals (replaces the existing ones).
+        void computeNormals();
+
+        // Per-vertex tangent frames from the uvs, for normal mapping (needs normals and uvs; replaces the
+        // existing tangents). The bitangent, cross(normal, tangent) * w, points toward the top of the
+        // texture: the OpenGL normal map convention.
+        void computeTangents();
+    };
+
+}

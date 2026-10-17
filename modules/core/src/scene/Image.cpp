@@ -1,7 +1,7 @@
 #include "third_party/stb_image.h"
 #include "third_party/stb_image_write.h"
 
-#include "Image.hpp"
+#include <kronk3d/scene/Image.hpp>
 #include <algorithm>
 #include <cmath>
 #include <fstream>
@@ -27,6 +27,16 @@ bool k3::Image::hasTransparency() const noexcept
         if (pixels[i] != 255)
             return true;
     return false;
+}
+
+bool k3::Image::isGrayscale(int tolerance) const noexcept
+{
+    for (std::size_t i = 0; i < pixels.size(); i += 4) {
+        const int r = pixels[i], g = pixels[i + 1], b = pixels[i + 2];
+        if (std::abs(r - g) > tolerance || std::abs(g - b) > tolerance)
+            return false;
+    }
+    return true;
 }
 
 k3::Result<k3::Image> k3::Image::loadFromMemory(const void* data, std::size_t size)
