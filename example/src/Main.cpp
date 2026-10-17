@@ -74,6 +74,7 @@ namespace
         k3::Backend backend = k3::Backend::Software;
         std::size_t scene = 2;
         std::string screenshot{};   // Render a few frames, save the last one there and quit
+        std::string model{};        // glTF / GLB file shown as scene 5 (default: the Fox)
         k3::AntiAliasing antiAliasing = k3::AntiAliasing::FXAA;
     };
 
@@ -104,7 +105,9 @@ namespace
                     return std::nullopt;
                 options.backend = value == "opengl" ? k3::Backend::OpenGL : k3::Backend::Software;
             } else if (arg == "--scene" && hasValue) {
-                options.scene = static_cast<std::size_t>(std::clamp(std::atoi(argv[++i]), 1, 4) - 1);
+                options.scene = static_cast<std::size_t>(std::clamp(std::atoi(argv[++i]), 1, 5) - 1);
+            } else if (arg == "--model" && hasValue) {
+                options.model = argv[++i];
             } else if (arg == "--screenshot" && hasValue) {
                 options.screenshot = argv[++i];
             } else if (arg == "--aa" && hasValue) {
@@ -133,13 +136,13 @@ int main(int argc, char** argv)
 
     const auto options = parseOptions(argc, argv);
     if (!options) {
-        std::cerr << "usage: " << argv[0] << " [--backend software|opengl] [--scene 1-4] [--aa none|fxaa|ssaa] [--screenshot file.png]" << std::endl;
+        std::cerr << "usage: " << argv[0] << " [--backend software|opengl] [--scene 1-5] [--model file.glb] [--aa none|fxaa|ssaa] [--screenshot file.png]" << std::endl;
         return 2;
     }
 
     const std::filesystem::path assets = K3_EXAMPLE_ASSETS_DIR;
 
-    // 1: textured cube, 2: vertex-colored cube, 3: Spot (OBJ + MTL + texture), 4: transparency
+    // 1: textured cube, 2: vertex-colored cube, 3: Spot (OBJ + MTL + texture), 4: transparency, 5: animated glTF
     const k3::Model texturedCube = makeTexturedCube(assets / "stone.png");
     const k3::Model coloredCube{"colored cube", {{std::make_shared<k3::Mesh>(cube), std::make_shared<k3::Material>()}}};
     auto spot = k3::ObjLoader::load(assets / "spot" / "spot.obj");
@@ -151,6 +154,22 @@ int main(int argc, char** argv)
 
     const k3::Model transparency = makeTransparencyScene();
     const k3::Model* scenes[] = {&texturedCube, &coloredCube, &*spot, &transparency};
+    constexpr std::size_t ANIMATED_SCENE = 4;
+
+    auto loadedGltf = k3::GltfLoader::load(options->model.empty() ? assets / "fox" / "Fox.glb" : std::filesystem::path(options->model));
+
+    if (!loadedGltf) {
+        std::cerr << "Cannot load the glTF model: " << loadedGltf.error() << std::endl;
+        return 1;
+    }
+
+    const auto animatedModel = std::make_shared<const k3::AnimatedModel>(std::move(*loadedGltf));
+    const auto animatedBounds = animatedModel->bounds();
+    k3::Animator animator(animatedModel);
+    std::size_t clip = 0;
+
+    if (!animatedModel->animations.empty())
+        animator.play(animatedModel->animations[clip].name);
     // Models are scaled to a 1.5 radius around the origin: the floor sits right under them.
     const k3::Model floor = makeFloor(8.f, -1.55f);
     std::size_t currentScene = options->scene;
@@ -218,8 +237,12 @@ int main(int argc, char** argv)
                 window.close();
             if (event.type == sf::Event::Resized)
                 rasterizer->resize(event.size.width, event.size.height);
-            if (event.type == sf::Event::KeyPressed && event.key.code >= sf::Keyboard::Num1 && event.key.code <= sf::Keyboard::Num4)
+            if (event.type == sf::Event::KeyPressed && event.key.code >= sf::Keyboard::Num1 && event.key.code <= sf::Keyboard::Num5)
                 currentScene = static_cast<std::size_t>(event.key.code - sf::Keyboard::Num1);
+            if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::E && !animatedModel->animations.empty()) {
+                clip = (clip + 1) % animatedModel->animations.size();
+                animator.play(animatedModel->animations[clip].name, {.fade = 0.25f});
+            }
             if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::Tab)
                 switchTo(backend == k3::Backend::Software ? k3::Backend::OpenGL : k3::Backend::Software);
             if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::F) {
@@ -242,15 +265,21 @@ int main(int argc, char** argv)
         const float rotationAngle = elapsedSinceStart * ROTATION_SPEED_RAD_PER_SEC;
 
         // Center the model on the origin and scale it to a ~3 unit wide box, then spin it.
-        const k3::Model& model = *scenes[currentScene];
-        const auto bounds = model.bounds();
+        const bool animated = currentScene == ANIMATED_SCENE;
+        const std::string& sceneName = animated ? animatedModel->name : scenes[currentScene]->name;
+        const auto bounds = animated ? animatedBounds : scenes[currentScene]->bounds();
         const auto fit = k3::Math::Matrix4::scale(1.5f / bounds.radius()) * k3::Math::Matrix4::translate(-bounds.center());
         const auto transform = k3::Math::Matrix4::rotateZX(rotationAngle) * fit;
 
         environment.lights[1].position = {2.f * std::cos(elapsedSinceStart), 1.f, 2.f * std::sin(elapsedSinceStart)};
 
         rasterizer->beginFrame(camera, environment);
-        rasterizer->draw(model, transform);
+        if (animated) {
+            animator.update(deltaTime);
+            animator.draw(*rasterizer, transform);
+        } else {
+            rasterizer->draw(*scenes[currentScene], transform);
+        }
         rasterizer->draw(floor);
         rasterizer->endFrame();
         frameTimeAccumulatedMs += rasterizer->stats().frameMs;
@@ -275,8 +304,8 @@ int main(int argc, char** argv)
             const double avgFrameMs = frameTimeAccumulatedMs / frameCount;
 
             window.setTitle(std::format(
-                "kronk3d [{}, {}] — {} — FPS: {:.1f} | render: {:.2f} ms | {} triangles [1-4: scene, Tab: backend, F: anti-aliasing]",
-                rasterizer->name(), toString(antiAliasing), model.name, fps, avgFrameMs, rasterizer->stats().triangles
+                "kronk3d [{}, {}] — {}{} — FPS: {:.1f} | render: {:.2f} ms | {} triangles [1-5: scene, E: animation, Tab: backend, F: anti-aliasing]",
+                rasterizer->name(), toString(antiAliasing), sceneName, animated ? " / " + std::string(animator.clip()) : "", fps, avgFrameMs, rasterizer->stats().triangles
             ));
 
             frameCount = 0;

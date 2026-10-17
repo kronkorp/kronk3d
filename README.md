@@ -16,6 +16,10 @@ Both backends produce the same image: the shading code is mirrored, and tests co
   - Wavefront **OBJ + MTL** loading: polygons with any number of sides, negative indices, vertex colors.
   - Normals are generated when the file has none (smooth, or flat with `s off`).
   - Material properties `Kd Ks Ke Ns d Tr illum` and textures `map_Kd map_Ks map_d norm map_Bump` (bump height maps are converted to normal maps).
+- **Animation**
+  - **glTF 2.0** loading (`.glb` / `.gltf`, what Blender exports): node hierarchy, skins, animation clips, metallic-roughness materials converted to Blinn-Phong, embedded or external textures.
+  - Skeletal animation: translation / rotation / scale channels (step, linear, cubic spline), up to 4 joints per vertex, crossfades between clips.
+  - Skinning runs on the CPU and produces plain meshes, so both backends draw animated characters unchanged.
 - **Lighting**
   - Per-pixel Blinn-Phong, computed in linear space with sRGB output.
   - Normal mapping (tangent space, OpenGL convention), with tangents computed from the uvs.
@@ -48,7 +52,7 @@ ctest --test-dir build --output-on-failure
 
 On Windows (Visual Studio), add `--config Release` to the build and `-C Release` to ctest.
 
-The library itself has no dependency: stb_image and stb_image_write are vendored. SFML 2.6 is only used
+The library itself has no dependency: stb_image, stb_image_write and cgltf are vendored. SFML 2.6 is only used
 by the example and the OpenGL tests, to open a window. CMake uses the system SFML when there is one,
 and otherwise downloads and builds it, so nothing has to be installed by hand on Windows.
 
@@ -124,13 +128,41 @@ Meshes, materials and textures are passed as `shared_ptr`. The OpenGL backend ca
 and frees it once nothing references it anymore. To change a texture, call `Texture::setImage` (which
 bumps its version); to change a mesh, replace it with a new one.
 
+### Animated characters
+
+Export from Blender with *File > Export > glTF 2.0* (`.glb`, with *Animation* checked): each Blender
+action (Walk, Jump, Idle...) becomes a clip, named after it. Then:
+
+```cpp
+auto loaded = k3::GltfLoader::load("assets/hero.glb");          // k3::Result<k3::AnimatedModel>
+if (!loaded)
+    return std::cerr << loaded.error() << '\n', 1;
+
+k3::Animator hero(std::make_shared<const k3::AnimatedModel>(std::move(*loaded)));
+hero.play("Walk");                                               // Loops by default
+
+// Each frame
+if (jumpPressed)
+    hero.play("Jump", {.loop = false, .fade = 0.1f});            // Crossfades from the current clip
+else if (hero.clip() == "Jump" && hero.finished())
+    hero.play("Walk");
+hero.update(deltaSeconds);
+rasterizer->beginFrame(camera, environment);
+hero.draw(*rasterizer, k3::Math::Matrix4::translate(position));  // Place the character in the world
+rasterizer->endFrame();
+```
+
+One `Animator` per character on screen; they can share the same `AnimatedModel`. `hero.model().animations`
+lists the clips. Calling `play` with the clip that is already playing does not restart it.
+
 ## Example
 
-`kronk3d_example [--backend software|opengl] [--scene 1-4] [--aa none|fxaa|ssaa] [--screenshot file.png]`
+`kronk3d_example [--backend software|opengl] [--scene 1-5] [--model file.glb] [--aa none|fxaa|ssaa] [--screenshot file.png]`
 
 | Key | Action |
 |---|---|
-| `1`-`4` | Textured cube, vertex-colored cube, Spot (OBJ), transparency |
+| `1`-`5` | Textured cube, vertex-colored cube, Spot (OBJ), transparency, animated glTF (the Fox, or `--model`) |
+| `E` | Next animation of the glTF model (crossfaded) |
 | `Tab` | Switch between the software and OpenGL backends |
 | `F` | Cycle anti-aliasing: none, FXAA, SSAA |
 | `ZQSD` / `WASD`, `Space`, `Shift` | Move |
@@ -158,6 +190,7 @@ casters (`ShadowSettings::cascades`, `resolution`).
 - **UVs**: `(0, 0)` is the top-left of the image. The OBJ loader flips `v` (`ObjLoadOptions::flipV`).
 - **Normal maps**: tangent space, OpenGL convention (green points toward the top of the image), linear color space. Meshes need tangents (`Mesh::computeTangents()`; the OBJ loader computes them when needed). `Texture::normalMapFromHeight` converts height maps.
 - **Colors**: every `Math::Color` is linear. Use `Color::fromSRGB` for colors taken from an image editor. Textures declare their color space (sRGB for colors, linear for masks).
+- **glTF**: loaded as is (right-handed, y up, counter-clockwise faces, `v = 0` at the top). Quaternions are `(x, y, z, w)`. Metallic-roughness maps to Blinn-Phong (`specular = lerp(4%, base color, metallic)`, `shininess = 2 / roughness^4 - 2`); morph targets, emissive / occlusion / metallic-roughness textures and `KHR_texture_transform` are ignored.
 - **Attenuation**: point and spot lights fall off as `(1 - (d / range)^4)^2 / (d^2 + 1)`.
 
 ## Layout
@@ -167,8 +200,8 @@ modules/
   math/    Vectors, matrices, bounds, colors (header-only)
   logger/  Logger
   core/src/
-    scene/     Image, Texture, Mesh, Material, Model, Camera, Light
-    io/        ObjLoader
+    scene/     Image, Texture, Mesh, Material, Model, Camera, Light, Animation, Animator
+    io/        ObjLoader, GltfLoader
     render/    IRasterizer, Environment, ShadowFit
       software/  SoftwareRasterizer: pipeline, clipper, sampling, shading, thread pool
       opengl/    HardwareRasterizer, ImagePresenter, GL loader, shaders
