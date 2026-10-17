@@ -12,6 +12,7 @@ Both backends produce the same image: the shading code is mirrored, and tests co
 - **Rendering API**
   - A frame is `beginFrame(camera, environment)`, any number of `draw(...)` calls, then `endFrame()`.
   - Backends are created at runtime with `createRasterizer(Backend::Software | Backend::OpenGL)`.
+  - **Billboards** (`BillboardBatch`): camera-facing quads (particles, sparks, smoke) with a position, size, color, rotation and sprite-sheet cell each, sorted and drawn in one call; the arena's torch embers are one.
   - **2D overlay** for a HUD or menus, identical on both backends: `drawRect` and `drawImage` (sprite sheets, tint, flipping), in output pixels, drawn over the 3D frame after anti-aliasing.  - Draws outside the camera frustum are skipped by the main pass (`FrameStats::culledDraws`); they still cast shadows.
 - **Assets**
   - Wavefront **OBJ + MTL** loading: polygons with any number of sides, negative indices, vertex colors.
