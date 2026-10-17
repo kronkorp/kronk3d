@@ -32,6 +32,8 @@ namespace
         GLuint             vao = 0, vbo = 0, ebo = 0;
         GLsizei            count = 0;               // Indices (or vertices when not indexed)
         bool               indexed = false;
+        std::size_t        vertexCount = 0;
+        std::uint64_t      revision = 0;            // Of the mesh these buffers were filled from
         bool               hasNormals = false, hasUVs = false, hasColors = false, hasTangents = false;
         k3::Math::Bounds3f bounds{};
     };
@@ -357,14 +359,20 @@ struct k3::HardwareRasterizer::Impl
             release(gpu);
         if (!gpu.vao)
             upload(*source, gpu);
+        else if (gpu.revision != source->revision)
+            refresh(*source, gpu);
         gpu.source = source;
         return gpu;
     }
 
-    static void upload(const Mesh& mesh, GpuMesh& gpu)
+    // Fills the vertex buffer (bound, with its VAO) from the mesh. Reallocating first lets the driver
+    // orphan the old storage instead of waiting for the GPU to be done with it.
+    static void writeVertices(const Mesh& mesh, GpuMesh& gpu)
     {
         const std::size_t n = mesh.vertexCount();
 
+        gpu.vertexCount = n;
+        gpu.revision = mesh.revision;
         gpu.hasNormals = mesh.hasNormals();
         gpu.hasUVs = mesh.hasUVs();
         gpu.hasColors = mesh.hasColors();
@@ -378,10 +386,6 @@ struct k3::HardwareRasterizer::Impl
         const std::size_t colorsSize = gpu.hasColors ? n * sizeof(Math::Color) : 0;
         const std::size_t tangentsSize = gpu.hasTangents ? n * sizeof(Math::Vector4f) : 0;
 
-        GenVertexArrays(1, &gpu.vao);
-        BindVertexArray(gpu.vao);
-        GenBuffers(1, &gpu.vbo);
-        BindBuffer(ARRAY_BUFFER, gpu.vbo);
         BufferData(ARRAY_BUFFER, static_cast<GLsizeiptr>(positionsSize + normalsSize + uvsSize + colorsSize + tangentsSize), nullptr, STATIC_DRAW);
 
         std::size_t offset = 0;
@@ -400,6 +404,31 @@ struct k3::HardwareRasterizer::Impl
         attribute(shaders::UV, 2, mesh.uvs.data(), uvsSize);
         attribute(shaders::COLOR, 4, mesh.colors.data(), colorsSize);
         attribute(shaders::TANGENT, 4, mesh.tangents.data(), tangentsSize);
+    }
+
+    // The mesh was edited in place (same vertex count, same indices): rewrite the vertices only.
+    static void refresh(const Mesh& mesh, GpuMesh& gpu)
+    {
+        if (mesh.vertexCount() != gpu.vertexCount) {
+            release(gpu);
+            upload(mesh, gpu);
+            return;
+        }
+        BindVertexArray(gpu.vao);
+        BindBuffer(ARRAY_BUFFER, gpu.vbo);
+        writeVertices(mesh, gpu);
+        BindVertexArray(0);
+    }
+
+    static void upload(const Mesh& mesh, GpuMesh& gpu)
+    {
+        const std::size_t n = mesh.vertexCount();
+
+        GenVertexArrays(1, &gpu.vao);
+        BindVertexArray(gpu.vao);
+        GenBuffers(1, &gpu.vbo);
+        BindBuffer(ARRAY_BUFFER, gpu.vbo);
+        writeVertices(mesh, gpu);
 
         // Out-of-range indices would read outside the buffer: drop those triangles, as the software backend does.
         const std::size_t indexCount = mesh.indexCount() / 3 * 3;

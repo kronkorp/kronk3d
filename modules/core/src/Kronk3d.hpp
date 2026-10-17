@@ -11,6 +11,8 @@
 #include "Matrix.hpp"
 #include "Vector.hpp"
 
+#include "scene/Animation.hpp"
+#include "scene/Animator.hpp"
 #include "scene/Camera.hpp"
 #include "scene/Image.hpp"
 #include "scene/Light.hpp"
@@ -19,6 +21,7 @@
 #include "scene/Model.hpp"
 #include "scene/Texture.hpp"
 
+#include "io/GltfLoader.hpp"
 #include "io/ObjLoader.hpp"
 
 #include "render/Environment.hpp"

@@ -245,3 +245,26 @@ K3_TEST(software_double_sided_blended_mesh_draws_back_faces_first)
     K3_CHECK_NEAR(center(rasterizer).r, 0.5f, 1e-6f);
     K3_CHECK_NEAR(center(rasterizer).g, 0.25f, 1e-6f);
 }
+
+K3_TEST(software_redraws_a_mesh_edited_in_place)
+{
+    k3::SoftwareRasterizer rasterizer(SIZE, SIZE);
+    auto mesh = quad(0.f);
+    auto draw = [&] {
+        rasterizer.beginFrame(orthoCamera(), blackEnvironment());
+        rasterizer.draw(mesh, solid(k3::Math::Color::Red), k3::Math::Matrix4::identity());
+        rasterizer.endFrame();
+    };
+
+    for (auto& position : mesh->positions)
+        position.x += 10.f;                             // Out of view: culled, its bounds are cached
+    ++mesh->revision;
+    draw();
+    K3_CHECK(center(rasterizer).r == 0.f);
+
+    for (auto& position : mesh->positions)
+        position.x -= 10.f;
+    ++mesh->revision;
+    draw();
+    K3_CHECK(center(rasterizer).r == 1.f);
+}

@@ -17,3 +17,9 @@ target_compile_definitions(kronk3d_example PRIVATE K3_EXAMPLE_ASSETS_DIR="${CMAK
 ###
 
 target_link_libraries(kronk3d_example PRIVATE kronk3d_shared sfml-window sfml-system)
+
+# Minimal glTF animation demo.
+add_executable(kronk3d_animation_demo animation/Main.cpp)
+apply_project_settings(kronk3d_animation_demo)
+target_compile_definitions(kronk3d_animation_demo PRIVATE K3_EXAMPLE_ASSETS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/assets")
+target_link_libraries(kronk3d_animation_demo PRIVATE kronk3d_shared sfml-window sfml-system)

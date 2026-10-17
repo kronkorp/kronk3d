@@ -7,6 +7,8 @@ bool k3::Mesh::valid() const noexcept
 
     if (!optional(normals.size()) || !optional(uvs.size()) || !optional(colors.size()) || !optional(tangents.size()))
         return false;
+    if (joints.size() != weights.size() || !optional(joints.size()))
+        return false;
     if (indexCount() % 3 != 0)
         return false;
     for (auto i : indices)

@@ -236,10 +236,11 @@ struct k3::SoftwareRasterizer::Impl
     Pass shadowPass;
 
     // Local bounds of every mesh drawn recently: computing them walks all the vertices, so it is done
-    // once per mesh, not once per frame. Meshes are immutable once drawn, as for the GPU backends.
+    // once per mesh, not once per frame. Meshes are only read again when their revision changes.
     struct CachedBounds
     {
         std::weak_ptr<const Mesh> source;
+        std::uint64_t             revision = 0;
         Math::Bounds3f            bounds{};
         bool                      valid = false;
     };
@@ -576,11 +577,14 @@ struct k3::SoftwareRasterizer::Impl
 
             drawBounds.push_back(&cached);
 
-            // Stale entry: its mesh is gone and this one reuses the address.
-            if (cached.valid && cached.source.expired())
+            // Stale entry: its mesh is gone and this one reuses the address, or it was edited in place.
+            const std::uint64_t revision = command.mesh->revision;
+
+            if (cached.valid && (cached.source.expired() || cached.revision != revision))
                 cached.valid = false;
-            if (!cached.valid && cached.source.lock() != command.mesh) {
+            if (!cached.valid && (cached.revision != revision || cached.source.lock() != command.mesh)) {
                 cached.source = command.mesh;
+                cached.revision = revision;
                 boundsToCompute.push_back(&cached);
             }
         }
