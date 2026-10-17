@@ -38,6 +38,7 @@ namespace
             {
                 calls.push_back({std::move(mesh), transform});
             }
+            void draw2D(std::shared_ptr<Texture>, const Rect&, const Rect&, const Math::Color&) override {}
             void endFrame() override {}
             Image readPixels() override { return {}; }
             const FrameStats& stats() const noexcept override { return m_stats; }

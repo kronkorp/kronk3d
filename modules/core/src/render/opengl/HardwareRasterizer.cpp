@@ -3,6 +3,7 @@
 #include "utils/Log.hpp"
 #include "Program.hpp"
 #include "Shaders.hpp"
+#include "render/Frustum.hpp"
 #include "render/ShadowFit.hpp"
 #include "render/software/Shading.hpp"
 #include <algorithm>
@@ -57,6 +58,14 @@ namespace
         const GpuMesh*                      gpu = nullptr;
         k3::Math::Bounds3f                  bounds{};
         float                               viewDepth = 0.f;
+        bool                                visible = true;     // In the camera frustum: shadow passes ignore it
+    };
+
+    struct Overlay
+    {
+        std::shared_ptr<k3::Texture> texture;
+        k3::Rect                     destination, source;
+        k3::Math::Color              tint;
     };
 
     const k3::Material& defaultMaterial()
@@ -178,9 +187,9 @@ namespace
 
 struct k3::HardwareRasterizer::Impl
 {
-    Impl(Program meshProgram, Program shadowProgram, Program ssaaProgram, Program fxaaProgram, Program skyProgram)
+    Impl(Program meshProgram, Program shadowProgram, Program ssaaProgram, Program fxaaProgram, Program skyProgram, Program overlayProgram)
         : mesh(std::move(meshProgram)), shadow(std::move(shadowProgram)), ssaa(std::move(ssaaProgram)), fxaa(std::move(fxaaProgram)),
-          sky(std::move(skyProgram)), meshUniforms(mesh), shadowUniforms(shadow)
+          sky(std::move(skyProgram)), overlay(std::move(overlayProgram)), meshUniforms(mesh), shadowUniforms(shadow)
     {
         GenVertexArrays(1, &fullscreenVao);
     }
@@ -206,6 +215,7 @@ struct k3::HardwareRasterizer::Impl
     Program        ssaa;
     Program        fxaa;
     Program        sky;
+    Program        overlay;
     MeshUniforms   meshUniforms;
     ShadowUniforms shadowUniforms;
     std::string    driver;
@@ -233,6 +243,7 @@ struct k3::HardwareRasterizer::Impl
     Math::Matrix4      view = Math::Matrix4::identity();
     Math::Matrix4      viewProjection = Math::Matrix4::identity();
     std::vector<DrawCommand> commands;
+    std::vector<Overlay>     overlays;
     FrameStats         stats{};
 
     /* Render target */
@@ -797,6 +808,8 @@ struct k3::HardwareRasterizer::Impl
         Disable(BLEND);
 
         for (std::size_t d = 0; d < firstBlended; ++d) {
+            if (!commands[d].visible)
+                continue;
             if (materialOf(commands[d]).doubleSided) {
                 Disable(CULL_FACE);
             } else {
@@ -815,6 +828,8 @@ struct k3::HardwareRasterizer::Impl
         BlendFuncSeparate(SRC_ALPHA, ONE_MINUS_SRC_ALPHA, ONE, ONE_MINUS_SRC_ALPHA);
         Enable(CULL_FACE);
         for (std::size_t d = firstBlended; d < commands.size(); ++d) {
+            if (!commands[d].visible)
+                continue;
             if (materialOf(commands[d]).doubleSided) {
                 CullFace(FRONT);
                 drawShaded(commands[d]);
@@ -825,6 +840,52 @@ struct k3::HardwareRasterizer::Impl
 
         Disable(BLEND);
         DepthMask(TRUE_);
+        Disable(FRAMEBUFFER_SRGB);
+    }
+
+    // 2D overlay over the finished frame, in submission order. Blending happens in linear space: the
+    // target is sRGB and the software backend blends the same way.
+    void drawOverlays()
+    {
+        if (overlays.empty())
+            return;
+
+        BindFramebuffer(FRAMEBUFFER, finalFbo());
+        Viewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+        Enable(FRAMEBUFFER_SRGB);
+        Disable(DEPTH_TEST);
+        Disable(CULL_FACE);
+        Enable(BLEND);
+        BlendFuncSeparate(SRC_ALPHA, ONE_MINUS_SRC_ALPHA, ONE, ONE_MINUS_SRC_ALPHA);
+        UseProgram(overlay.id());
+        Uniform4f(overlay.uniform("uViewport"), static_cast<float>(width), static_cast<float>(height), 0.f, 0.f);
+        Uniform1i(overlay.uniform("uImage"), 0);
+        BindVertexArray(fullscreenVao);
+
+        const GLint rect = overlay.uniform("uRect"), sourceUniform = overlay.uniform("uSource");
+        const GLint hasImage = overlay.uniform("uHasImage"), tintUniform = overlay.uniform("uTint");
+
+        for (const Overlay& entry : overlays) {
+            const Rect& to = entry.destination;
+
+            if (!(to.width > 0.f && to.height > 0.f))
+                continue;
+
+            const bool textured = bindTexture(0, entry.texture);
+            Rect from = entry.source;
+
+            if (textured && (from.width == 0.f || from.height == 0.f))
+                from = {0.f, 0.f, static_cast<float>(entry.texture->width()), static_cast<float>(entry.texture->height())};
+            const float w = textured ? static_cast<float>(entry.texture->width()) : 1.f;
+            const float h = textured ? static_cast<float>(entry.texture->height()) : 1.f;
+
+            Uniform1i(hasImage, textured);
+            Uniform4f(rect, to.x, to.y, to.width, to.height);
+            Uniform4f(sourceUniform, from.x / w, from.y / h, (from.x + from.width) / w, (from.y + from.height) / h);
+            Uniform4f(tintUniform, entry.tint.r, entry.tint.g, entry.tint.b, entry.tint.a);
+            DrawArrays(TRIANGLES, 0, 6);
+        }
+        Disable(BLEND);
         Disable(FRAMEBUFFER_SRGB);
     }
 
@@ -884,8 +945,11 @@ k3::Result<std::unique_ptr<k3::HardwareRasterizer>> k3::HardwareRasterizer::crea
     auto sky = gl::Program::create(gl::shaders::SKY_VERTEX, gl::shaders::SKY_FRAGMENT);
     if (!sky)
         return Error{"OpenGL: sky shader: " + sky.error()};
+    auto overlay = gl::Program::create(gl::shaders::OVERLAY_VERTEX, gl::shaders::OVERLAY_FRAGMENT);
+    if (!overlay)
+        return Error{"OpenGL: overlay shader: " + overlay.error()};
 
-    auto impl = std::make_unique<Impl>(std::move(*mesh), std::move(*shadow), std::move(*ssaa), std::move(*fxaa), std::move(*sky));
+    auto impl = std::make_unique<Impl>(std::move(*mesh), std::move(*shadow), std::move(*ssaa), std::move(*fxaa), std::move(*sky), std::move(*overlay));
     impl->driver = std::string(version) + " / " + (renderer ? renderer : "unknown");
     impl->resize(width, height);
     log(LogLevel::Info, "OpenGL rasterizer on {}", impl->driver);
@@ -937,6 +1001,7 @@ void k3::HardwareRasterizer::beginFrame(const Camera& camera, const Environment&
     impl.view = camera.view();
     impl.viewProjection = camera.projectionMatrix(aspect) * impl.view;
     impl.commands.clear();
+    impl.overlays.clear();
     impl.stats = {};
 }
 
@@ -949,6 +1014,11 @@ void k3::HardwareRasterizer::draw(std::shared_ptr<const Mesh> mesh, std::shared_
     m_impl->commands.push_back({std::move(mesh), std::move(material), transform});
 }
 
+void k3::HardwareRasterizer::draw2D(std::shared_ptr<Texture> texture, const Rect& destination, const Rect& source, const Math::Color& tint)
+{
+    m_impl->overlays.push_back({std::move(texture), destination, source, tint});
+}
+
 void k3::HardwareRasterizer::endFrame()
 {
     auto& impl = *m_impl;
@@ -956,12 +1026,17 @@ void k3::HardwareRasterizer::endFrame()
 
     if (!impl.fbo) {
         impl.commands.clear();
+        impl.overlays.clear();
         return;
     }
+
+    const Frustum frustum(impl.viewProjection);
 
     for (DrawCommand& command : impl.commands) {
         command.gpu = &impl.meshFor(command.mesh);
         command.bounds = command.gpu->bounds.transformed(command.transform);
+        command.visible = frustum.intersects(command.bounds);
+        impl.stats.culledDraws += !command.visible;
     }
 
     // Same ordering as the software backend: opaque in submission order, blended farthest first.
@@ -980,10 +1055,12 @@ void k3::HardwareRasterizer::endFrame()
     impl.setFrameUniforms(lights, shadowLight, cascades);
     impl.renderMain(blendedStart);
     impl.antiAlias();
+    impl.drawOverlays();
     impl.present();
     impl.restoreState();
 
     impl.commands.clear();
+    impl.overlays.clear();
     impl.collectGarbage();
     impl.stats.frameMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
