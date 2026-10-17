@@ -9,6 +9,7 @@
 #include "Bounds.hpp"
 #include "Color.hpp"
 #include "Vector.hpp"
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <vector>
@@ -26,6 +27,10 @@ namespace k3
         std::vector<Math::Vector2f> uvs{};
         std::vector<Math::Color>    colors{};
         std::vector<Math::Vector4f> tangents{};  // xyz: direction of +u, w: handedness (+-1). For normal maps
+        // Skinning (see Animator): up to 4 joints per vertex, as indices into the Skin's joint list. The
+        // renderers ignore them: an Animator poses the mesh on the CPU and draws the result.
+        std::vector<std::array<std::uint16_t, 4>> joints{};
+        std::vector<Math::Vector4f>               weights{};     // Sum to 1
         std::vector<std::uint32_t>  indices{};   // Empty: positions are read three by three
 
         [[nodiscard]] std::size_t vertexCount() const noexcept { return positions.size(); }
@@ -41,6 +46,10 @@ namespace k3
         [[nodiscard]] bool hasUVs() const noexcept { return !positions.empty() && uvs.size() == positions.size(); }
         [[nodiscard]] bool hasColors() const noexcept { return !positions.empty() && colors.size() == positions.size(); }
         [[nodiscard]] bool hasTangents() const noexcept { return !positions.empty() && tangents.size() == positions.size(); }
+        [[nodiscard]] bool hasSkin() const noexcept
+        {
+            return !positions.empty() && joints.size() == positions.size() && weights.size() == positions.size();
+        }
 
         // Attribute sizes are consistent and every index is in range.
         [[nodiscard]] bool valid() const noexcept;

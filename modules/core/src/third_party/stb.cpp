@@ -1,4 +1,4 @@
-// Compiles the stb implementations exactly once for the whole project, with warnings silenced:
+// Compiles the stb and cgltf implementations exactly once for the whole project, with warnings silenced:
 // third-party code, not ours to fix. Every other translation unit only sees the declarations.
 #if defined(_MSC_VER)
     #pragma warning(push, 0)
@@ -23,6 +23,8 @@
 #include "stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
+#define CGLTF_IMPLEMENTATION
+#include "cgltf.h"
 
 #if defined(_MSC_VER)
     #pragma warning(pop)
