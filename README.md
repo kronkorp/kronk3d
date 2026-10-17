@@ -29,7 +29,7 @@ Both backends produce the same image: the shading code is mirrored, and tests co
 - **Lighting**
   - Per-pixel Blinn-Phong, computed in linear space with sRGB output.
   - Normal mapping (tangent space, OpenGL convention), with tangents computed from the uvs.
-  - Ambient, directional, point and spot lights (up to 8).
+  - Ambient, directional, point and spot lights (up to 8). The ambient light can be a **hemisphere** (`Environment::ambientGround`: a sky above, a floor below), and `Material::flatShading` gives the faceted look of low poly.
   - Cascaded shadow maps for a directional light (stable when the camera moves or turns), with PCF soft edges and the alpha test applied to casters.
 - **Textures**
   - Mipmaps built in linear space for sRGB textures.
@@ -191,7 +191,7 @@ Textures use their own sampler (`Nearest` for pixel art) and keep their alpha.
 
 ### Arena
 
-`kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--scale 0.05-1] [--screenshot file.png [--seconds S]] [--bounds]`
+`kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--scale 0.05-1] [--screenshot file.png [--seconds S]] [--bounds] [--flat]`
 
 A third-person showcase: you drive the robot of the Godot 3D platformer demo (`example/assets/robot`,
 MIT) around a stone arena with walls, stairs, 170 crates, torch pillars and a glass panel. It uses the
@@ -206,6 +206,7 @@ overlay (counters drawn with a pixel font, and a minimap).
 | `T` | Day, sunset, night |
 | `F` | Fog on / off |
 | `V` | Anti-aliasing: none, FXAA, SSAA |
+| `G` | Flat-shaded (faceted) robot |
 | `R` | Render resolution: full, half, quarter (big pixels); the HUD stays sharp |
 | `H` | Hide / show the HUD (frames per second, draw calls, draws culled) |
 | `B` | Collision boxes, drawn as debug lines |
