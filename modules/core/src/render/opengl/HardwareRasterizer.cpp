@@ -137,7 +137,7 @@ namespace
     struct MeshUniforms
     {
         GLint viewProjection, model, normalMatrix;
-        GLint cameraPosition, viewDirection, orthographic, ambient, fogColor, fog;
+        GLint cameraPosition, viewDirection, orthographic, ambient, ambientGround, fogColor, fog;
         GLint lightCount, lightType, lightPosition, lightToLight, lightDirection, lightRadiance, lightRange, lightCosInner, lightCosOuter;
         GLint shadowLight, shadowMap, shadowViewProjection, shadowSize, shadowDepthBias, shadowNormalOffset, shadowPcfRadius;
         GLint shadowCascadeCount, shadowSplit;
@@ -149,7 +149,7 @@ namespace
             : viewProjection(p.uniform("uViewProjection")), model(p.uniform("uModel")), normalMatrix(p.uniform("uNormalMatrix")),
               cameraPosition(p.uniform("uCameraPosition")), viewDirection(p.uniform("uViewDirection")),
               orthographic(p.uniform("uOrthographic")), ambient(p.uniform("uAmbient")),
-              fogColor(p.uniform("uFogColor")), fog(p.uniform("uFog")),
+              ambientGround(p.uniform("uAmbientGround")), fogColor(p.uniform("uFogColor")), fog(p.uniform("uFog")),
               lightCount(p.uniform("uLightCount")), lightType(p.uniform("uLightType")), lightPosition(p.uniform("uLightPosition")),
               lightToLight(p.uniform("uLightToLight")), lightDirection(p.uniform("uLightDirection")),
               lightRadiance(p.uniform("uLightRadiance")), lightRange(p.uniform("uLightRange")),
@@ -660,6 +660,7 @@ struct k3::HardwareRasterizer::Impl
         Uniform3f(u.viewDirection, lights.viewDirection.x, lights.viewDirection.y, lights.viewDirection.z);
         Uniform1i(u.orthographic, lights.orthographic);
         Uniform3f(u.ambient, lights.ambient.r, lights.ambient.g, lights.ambient.b);
+        Uniform4f(u.ambientGround, lights.ambientGround.r, lights.ambientGround.g, lights.ambientGround.b, lights.hemisphere ? 1.f : 0.f);
         Uniform4f(u.fogColor, lights.fog.color.r, lights.fog.color.g, lights.fog.color.b, lights.fog.enabled ? 1.f : 0.f);
         Uniform4f(u.fog, lights.fog.density, lights.fog.falloff, 0.f, 0.f);
         Uniform1i(u.lightCount, static_cast<GLint>(lights.lightCount));
@@ -714,7 +715,7 @@ struct k3::HardwareRasterizer::Impl
         Uniform1i(u.unlit, material.unlit);
         Uniform1i(u.alphaMode, static_cast<GLint>(material.alphaMode));
         Uniform1f(u.alphaCutoff, material.alphaCutoff);
-        Uniform1i(u.hasNormals, command.gpu->hasNormals);
+        Uniform1i(u.hasNormals, command.gpu->hasNormals && !material.flatShading);
         Uniform1i(u.hasDiffuseMap, bindTexture(DIFFUSE_UNIT, material.diffuseMap));
         Uniform1i(u.hasSpecularMap, bindTexture(SPECULAR_UNIT, material.specularMap));
         Uniform1i(u.hasOpacityMap, bindTexture(OPACITY_UNIT, material.opacityMap));

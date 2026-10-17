@@ -41,6 +41,7 @@ namespace k3
         float     alphaCutoff = 0.5f;
         bool      doubleSided = false;
         bool      unlit       = false;                      // Output diffuse * textures * vertex colors, no lighting
+        bool      flatShading = false;                      // Lit with each triangle's own normal instead of the vertex normals: a faceted look
         bool      castShadows = true;
     };
 

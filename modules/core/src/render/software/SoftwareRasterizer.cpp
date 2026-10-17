@@ -391,7 +391,7 @@ struct k3::SoftwareRasterizer::Impl
             const Material& material = command.material ? *command.material : defaultMaterial();
 
             const bool normalMapped = material.normalMap && mesh.hasNormals() && mesh.hasUVs() && mesh.hasTangents();
-            drawStates.push_back({&material, material.alphaMode == AlphaMode::Mask, mesh.hasNormals(), mesh.hasColors(), normalMapped});
+            drawStates.push_back({&material, material.alphaMode == AlphaMode::Mask, mesh.hasNormals() && !material.flatShading, mesh.hasColors(), normalMapped});
             transforms.push_back({command.transform, command.transform.normalMatrix(), handedness(command.transform)});
         }
     }

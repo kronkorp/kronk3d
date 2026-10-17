@@ -71,6 +71,7 @@ uniform vec3  uCameraPosition;
 uniform vec3  uViewDirection;
 uniform bool  uOrthographic;
 uniform vec3  uAmbient;
+uniform vec4  uAmbientGround;   // rgb, and a = 1 for a hemisphere light (ambient above, this below)
 uniform vec4  uFogColor;    // rgb, and a = 1 when the fog is on
 uniform vec4  uFog;         // x: density at the camera's altitude, y: height falloff
 uniform int   uLightCount;
@@ -203,7 +204,11 @@ void main()
     bool hasSpecular = specular.r > 0.0 || specular.g > 0.0 || specular.b > 0.0;
     float shininess = max(uShininess, 1.0);
 
-    vec3 result = uAmbient * albedo.rgb + uEmissive;
+    // Hemisphere light: the ambient color slides from the ground's to the sky's with the normal's height.
+    vec3 ambient = uAmbient;
+    if (uAmbientGround.a > 0.5)
+        ambient = mix(uAmbientGround.rgb, uAmbient, n.y * 0.5 + 0.5);
+    vec3 result = ambient * albedo.rgb + uEmissive;
 
     for (int i = 0; i < uLightCount; ++i) {
         vec3 l = uLightToLight[i];
