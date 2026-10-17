@@ -1,9 +1,10 @@
 // Third-person showcase of the renderer: a robot you drive around an arena.
 //     kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night]
-//                   [--flat] [--screenshot file.png [--seconds S]]
+//                   [--scale 0.05-1] [--screenshot file.png [--seconds S]]
+//                   [--bounds] [--flat]
 //
 // ZQSD / WASD: move (relative to the camera)    Shift: run     Space: jump
-// Mouse / arrows: camera                         T: time of day    F: fog    V: anti-aliasing    H: HUD
+// Mouse / arrows: camera     T: time of day    F: fog    V: anti-aliasing    H: HUD    B: collision boxes
 // Escape: quit
 //
 // With --screenshot the character is driven by a short script, the frame is saved and the program quits
@@ -45,6 +46,8 @@ namespace
         k3::AntiAliasing antiAliasing = k3::AntiAliasing::FXAA;
         std::size_t      timeOfDay = 0;
         bool             flatRobot = false;
+        float            renderScale = 1.f;
+        bool             bounds = false;        // Draw the collision boxes (debug lines)
         std::string      screenshot{};
         float            seconds = 3.f;
     };
@@ -112,6 +115,10 @@ namespace
                 options.timeOfDay = static_cast<std::size_t>(found - TIMES.begin());
             } else if (arg == "--flat") {
                 options.flatRobot = true;
+            } else if (arg == "--scale" && hasValue) {
+                options.renderScale = static_cast<float>(std::atof(argv[++i]));
+            } else if (arg == "--bounds") {
+                options.bounds = true;
             } else if (arg == "--screenshot" && hasValue) {
                 options.screenshot = argv[++i];
             } else if (arg == "--seconds" && hasValue) {
@@ -145,18 +152,30 @@ namespace
             void nextTimeOfDay() { setTimeOfDay((m_time + 1) % TIMES.size()); }
             void toggleFog() { m_fog = !m_fog; }
             void toggleFlatRobot() { m_player.toggleFlatShading(); }
+            void toggleBounds() { m_bounds = !m_bounds; }
 
             [[nodiscard]] float cameraYaw() const noexcept { return m_yaw; }
             [[nodiscard]] const Player& player() const noexcept { return m_player; }
             [[nodiscard]] const Level& level() const noexcept { return m_level; }
             [[nodiscard]] const TimeOfDay& timeOfDay() const noexcept { return TIMES[m_time]; }
             [[nodiscard]] bool fog() const noexcept { return m_fog; }
+            [[nodiscard]] bool bounds() const noexcept { return m_bounds; }
 
             void draw(k3::IRasterizer& rasterizer)
             {
                 rasterizer.beginFrame(camera(), environment());
                 m_level.draw(rasterizer);
                 m_player.draw(rasterizer);
+
+                // The collision boxes (yellow, the glass one cyan) and the character's (green): debug lines.
+                if (m_bounds) {
+                    for (const Box& box : m_level.solids())
+                        rasterizer.drawBounds({box.min, box.max}, box.glass ? Color{0.3f, 1.f, 1.f, 1.f} : Color{1.f, 0.9f, 0.2f, 1.f});
+
+                    const Vector3f feet = m_player.position();
+
+                    rasterizer.drawBounds({{feet.x - Player::RADIUS, feet.y, feet.z - Player::RADIUS}, {feet.x + Player::RADIUS, feet.y + Player::HEIGHT, feet.z + Player::RADIUS}}, Color{0.2f, 1.f, 0.3f, 1.f}, k3::Math::Matrix4::identity(), false);
+                }
             }
 
         private:
@@ -241,6 +260,7 @@ namespace
             std::size_t  m_time = 0;
             bool         m_lighterShadows;
             bool         m_fog = true;
+            bool         m_bounds = false;
             float        m_yaw = 0.4f;
             float        m_pitch = -0.4f;
     };
@@ -303,7 +323,7 @@ int main(int argc, char** argv)
     const auto options = parseOptions(argc, argv);
 
     if (!options) {
-        std::cerr << "usage: " << argv[0] << " [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--flat] [--screenshot file.png [--seconds S]]" << std::endl;
+        std::cerr << "usage: " << argv[0] << " [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--scale 0.05-1] [--screenshot file.png [--seconds S]] [--bounds] [--flat]" << std::endl;
         return 2;
     }
 
@@ -316,6 +336,8 @@ int main(int argc, char** argv)
     World world(Level(assets), std::move(*player), options->timeOfDay, options->backend == k3::Backend::Software);
     if (options->flatRobot)
         world.toggleFlatRobot();
+    if (options->bounds)
+        world.toggleBounds();
     const bool windowless = !options->screenshot.empty() && options->backend == k3::Backend::Software;
     constexpr unsigned WIDTH = 1280, HEIGHT = 720;
 
@@ -338,7 +360,7 @@ int main(int argc, char** argv)
         }
         presenter = std::move(*created);
     }
-    auto created = k3::createRasterizer(options->backend, {.width = WIDTH, .height = HEIGHT, .glLoader = loader, .antiAliasing = options->antiAliasing});
+    auto created = k3::createRasterizer(options->backend, {.width = WIDTH, .height = HEIGHT, .glLoader = loader, .antiAliasing = options->antiAliasing, .renderScale = options->renderScale});
 
     if (!created) {
         std::cerr << "Cannot initialize rendering: " << created.error() << std::endl;
@@ -384,6 +406,13 @@ int main(int argc, char** argv)
                 world.toggleFlatRobot();
             else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::H)
                 showHud = !showHud;
+            else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::R) {
+                // Full resolution, half, then big pixels.
+                const float scale = rasterizer->renderScale();
+
+                rasterizer->setRenderScale(scale > 0.9f ? 0.5f : scale > 0.4f ? 0.25f : 1.f);
+            } else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::B)
+                world.toggleBounds();
             else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::V) {
                 const auto next = rasterizer->antiAliasing() == k3::AntiAliasing::None   ? k3::AntiAliasing::FXAA
                                   : rasterizer->antiAliasing() == k3::AntiAliasing::FXAA ? k3::AntiAliasing::SSAA
@@ -422,7 +451,7 @@ int main(int argc, char** argv)
         ++fpsFrames;
         if (fpsTime >= 0.5f) {
             fps = static_cast<int>(static_cast<float>(fpsFrames) / fpsTime + 0.5f);
-            window->setTitle("kronk3d arena - " + std::string(rasterizer->name()) + ", " + toString(rasterizer->antiAliasing()) + ", " + world.timeOfDay().name
+            window->setTitle("kronk3d arena - " + std::string(rasterizer->name()) + ", " + toString(rasterizer->antiAliasing()) + ", x" + std::to_string(rasterizer->renderScale()).substr(0, 4) + ", " + world.timeOfDay().name
                              + (world.fog() ? ", fog" : ", no fog") + " - " + std::to_string(fps) + " fps, "
                              + std::to_string(rasterizer->stats().culledDraws) + "/" + std::to_string(rasterizer->stats().drawCalls) + " draws culled");
             fpsTime = 0.f;

@@ -443,6 +443,35 @@ void main()
 }
 )glsl";
 
+    // Debug lines (IRasterizer::drawLines): world-space segments with a color per vertex. The depth is
+    // pulled slightly toward the camera so that lines lying on a surface (the edges of a box) win against it.
+    inline constexpr const char* LINE_VERTEX = R"glsl(
+#version 330 core
+layout(location = 0) in vec3 aPosition;
+layout(location = 1) in vec4 aColor;
+
+uniform mat4 uViewProjection;
+out vec4 vColor;
+
+void main()
+{
+    vColor = aColor;
+    gl_Position = uViewProjection * vec4(aPosition, 1.0);
+    gl_Position.z -= 1e-4 * gl_Position.w;
+}
+)glsl";
+
+    inline constexpr const char* LINE_FRAGMENT = R"glsl(
+#version 330 core
+in vec4 vColor;
+out vec4 fragColor;
+
+void main()
+{
+    fragColor = vColor;
+}
+)glsl";
+
     // Full-screen triangle showing a CPU image (ImagePresenter).
     inline constexpr const char* PRESENT_VERTEX = R"glsl(
 #version 330 core
