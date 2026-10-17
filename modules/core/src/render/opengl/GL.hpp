@@ -41,6 +41,7 @@ namespace k3::gl
     inline constexpr GLenum RENDERER                = 0x1F01;
     inline constexpr GLenum DEPTH_BUFFER_BIT        = 0x00000100;
     inline constexpr GLenum COLOR_BUFFER_BIT        = 0x00004000;
+    inline constexpr GLenum LINES                   = 0x0001;
     inline constexpr GLenum TRIANGLES               = 0x0004;
     inline constexpr GLenum LESS                    = 0x0201;
     inline constexpr GLenum LEQUAL                  = 0x0203;
