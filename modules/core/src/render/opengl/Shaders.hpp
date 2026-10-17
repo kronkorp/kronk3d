@@ -370,6 +370,42 @@ void main()
 }
 )glsl";
 
+    // 2D overlay (IRasterizer::draw2D): one rectangle, six vertices from gl_VertexID. The rectangle
+    // (x, y, width, height) is in output pixels, y down; uSource is the texture area (u0, v0, u1, v1).
+    inline constexpr const char* OVERLAY_VERTEX = R"glsl(
+#version 330 core
+uniform vec4 uRect;
+uniform vec4 uSource;
+uniform vec4 uViewport;     // Output size in xy
+out vec2 vUV;
+
+const vec2 CORNERS[6] = vec2[6](vec2(0.0, 0.0), vec2(1.0, 0.0), vec2(0.0, 1.0), vec2(1.0, 0.0), vec2(1.0, 1.0), vec2(0.0, 1.0));
+
+void main()
+{
+    vec2 corner = CORNERS[gl_VertexID];
+    vec2 pixel = uRect.xy + corner * uRect.zw;
+
+    vUV = mix(uSource.xy, uSource.zw, corner);
+    gl_Position = vec4(pixel.x / uViewport.x * 2.0 - 1.0, 1.0 - pixel.y / uViewport.y * 2.0, 0.0, 1.0);
+}
+)glsl";
+
+    inline constexpr const char* OVERLAY_FRAGMENT = R"glsl(
+#version 330 core
+in vec2 vUV;
+out vec4 fragColor;
+
+uniform sampler2D uImage;
+uniform int  uHasImage;
+uniform vec4 uTint;
+
+void main()
+{
+    fragColor = uHasImage != 0 ? texture(uImage, vUV) * uTint : uTint;
+}
+)glsl";
+
     // Full-screen triangle showing a CPU image (ImagePresenter).
     inline constexpr const char* PRESENT_VERTEX = R"glsl(
 #version 330 core

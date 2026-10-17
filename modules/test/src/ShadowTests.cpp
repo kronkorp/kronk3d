@@ -216,3 +216,18 @@ K3_TEST(shadow_cascades_move_by_whole_texels)
         K3_CHECK_NEAR(dy, std::round(dy), 0.01f);
     }
 }
+
+K3_TEST(shadow_caster_outside_the_view_still_shadows_it)
+{
+    // The occluder is left of the view (x in [-3.5, -2.5]); its shadow slides 1 unit right, into the view.
+    k3::SoftwareRasterizer rasterizer(SIZE, SIZE);
+
+    rasterizer.beginFrame(topCamera(), slantedSun(true));
+    rasterizer.draw(plane(2.f, 0.f), std::make_shared<k3::Material>(), k3::Math::Matrix4::identity());
+    rasterizer.draw(plane(0.5f, 1.f), std::make_shared<k3::Material>(), k3::Math::Matrix4::translate({-3.f, 0.f, 0.f}));
+    rasterizer.endFrame();
+
+    K3_CHECK(rasterizer.stats().culledDraws == 1);
+    K3_CHECK(rasterizer.colorBuffer()[MIDDLE_ROW + 2].r == 0.f);            // x = -1.75: shadowed
+    K3_CHECK_NEAR(rasterizer.colorBuffer()[MIDDLE_ROW + 12].r, SUN, 1e-4f); // x = -0.25: lit
+}
