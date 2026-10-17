@@ -245,6 +245,8 @@ struct k3::HardwareRasterizer::Impl
     Math::Matrix4      viewProjection = Math::Matrix4::identity();
     std::vector<DrawCommand> commands;
     std::vector<Overlay>     overlays;
+    std::vector<Camera>      layerCameras;      // Of each layer, the frame's own first
+    std::vector<std::size_t> layerStarts;       // Index in `commands` where each layer's draws begin
     FrameStats         stats{};
 
     /* Render target */
@@ -793,7 +795,8 @@ struct k3::HardwareRasterizer::Impl
         UseProgram(mesh.id());
     }
 
-    void renderMain(std::size_t firstBlended)
+    // `firstLayer`: start from the clear color and draw the sky; a later layer only clears the depth.
+    void renderMain(std::size_t firstBlended, bool firstLayer)
     {
         BindFramebuffer(FRAMEBUFFER, fbo);
         Viewport(0, 0, static_cast<GLsizei>(renderWidth), static_cast<GLsizei>(renderHeight));
@@ -804,7 +807,7 @@ struct k3::HardwareRasterizer::Impl
         DepthMask(TRUE_);
         ClearColor(environment.clearColor.r, environment.clearColor.g, environment.clearColor.b, environment.clearColor.a);
         ClearDepth(1.0);
-        Clear(COLOR_BUFFER_BIT | DEPTH_BUFFER_BIT);
+        Clear(firstLayer ? COLOR_BUFFER_BIT | DEPTH_BUFFER_BIT : DEPTH_BUFFER_BIT);
         Enable(DEPTH_TEST);
         DepthFunc(LESS);
         FrontFace(CCW);
@@ -822,7 +825,8 @@ struct k3::HardwareRasterizer::Impl
             drawShaded(commands[d]);
         }
 
-        drawSky();
+        if (firstLayer)
+            drawSky();
 
         // Blended geometry, farthest first, depth-tested but not written. A double-sided blended mesh
         // draws its back faces first so they end up behind its front faces.
@@ -1003,9 +1007,17 @@ void k3::HardwareRasterizer::beginFrame(const Camera& camera, const Environment&
     impl.environment = environment;
     impl.view = camera.view();
     impl.viewProjection = camera.projectionMatrix(aspect) * impl.view;
+    impl.layerCameras = {camera};
+    impl.layerStarts = {0};
     impl.commands.clear();
     impl.overlays.clear();
     impl.stats = {};
+}
+
+void k3::HardwareRasterizer::beginLayer(const Camera& camera)
+{
+    m_impl->layerCameras.push_back(camera);
+    m_impl->layerStarts.push_back(m_impl->commands.size());
 }
 
 void k3::HardwareRasterizer::draw(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material> material, const Math::Matrix4& transform)
@@ -1033,30 +1045,47 @@ void k3::HardwareRasterizer::endFrame()
         return;
     }
 
-    const Frustum frustum(impl.viewProjection);
-
-    for (DrawCommand& command : impl.commands) {
-        command.gpu = &impl.meshFor(command.mesh);
-        command.bounds = command.gpu->bounds.transformed(command.transform);
-        command.visible = frustum.intersects(command.bounds);
-        impl.stats.culledDraws += !command.visible;
-    }
-
-    // Same ordering as the software backend: opaque in submission order, blended farthest first.
-    const auto isBlended = [](const DrawCommand& c) { return materialOf(c).alphaMode == AlphaMode::Blend; };
-    const auto firstBlended = std::stable_partition(impl.commands.begin(), impl.commands.end(), [&](const DrawCommand& c) { return !isBlended(c); });
-    for (auto it = firstBlended; it != impl.commands.end(); ++it)
-        it->viewDepth = -impl.view.transformPoint(it->bounds.center()).z;
-    std::stable_sort(firstBlended, impl.commands.end(), [](const DrawCommand& a, const DrawCommand& b) { return a.viewDepth > b.viewDepth; });
-    const auto blendedStart = static_cast<std::size_t>(firstBlended - impl.commands.begin());
-
-    const sw::ShadingContext lights = sw::ShadingContext::prepare(impl.camera, impl.environment);
+    // Each layer is drawn in turn into the same target. The first renders the shadow maps (from its own
+    // draws) and the sky; the others look through their own camera over a cleared depth buffer.
+    std::vector<DrawCommand> recorded = std::move(impl.commands);
     std::vector<ShadowCascade> cascades;
-    const int shadowLight = impl.renderShadows(lights, blendedStart, cascades);
+    int shadowLight = -1;
+    const float aspect = impl.height ? static_cast<float>(impl.width) / static_cast<float>(impl.height) : 1.f;
 
-    gl::UseProgram(impl.mesh.id());
-    impl.setFrameUniforms(lights, shadowLight, cascades);
-    impl.renderMain(blendedStart);
+    for (std::size_t layer = 0; layer < impl.layerStarts.size(); ++layer) {
+        const std::size_t first = impl.layerStarts[layer];
+        const std::size_t last = layer + 1 < impl.layerStarts.size() ? impl.layerStarts[layer + 1] : recorded.size();
+
+        impl.commands.assign(std::make_move_iterator(recorded.begin() + static_cast<std::ptrdiff_t>(first)), std::make_move_iterator(recorded.begin() + static_cast<std::ptrdiff_t>(last)));
+        impl.camera = impl.layerCameras[layer];
+        impl.view = impl.camera.view();
+        impl.viewProjection = impl.camera.projectionMatrix(aspect) * impl.view;
+
+        const Frustum frustum(impl.viewProjection);
+
+        for (DrawCommand& command : impl.commands) {
+            command.gpu = &impl.meshFor(command.mesh);
+            command.bounds = command.gpu->bounds.transformed(command.transform);
+            command.visible = frustum.intersects(command.bounds);
+            impl.stats.culledDraws += !command.visible;
+        }
+
+        // Same ordering as the software backend: opaque in submission order, blended farthest first.
+        const auto isBlended = [](const DrawCommand& c) { return materialOf(c).alphaMode == AlphaMode::Blend; };
+        const auto firstBlended = std::stable_partition(impl.commands.begin(), impl.commands.end(), [&](const DrawCommand& c) { return !isBlended(c); });
+        for (auto it = firstBlended; it != impl.commands.end(); ++it)
+            it->viewDepth = -impl.view.transformPoint(it->bounds.center()).z;
+        std::stable_sort(firstBlended, impl.commands.end(), [](const DrawCommand& a, const DrawCommand& b) { return a.viewDepth > b.viewDepth; });
+        const auto blendedStart = static_cast<std::size_t>(firstBlended - impl.commands.begin());
+
+        const sw::ShadingContext lights = sw::ShadingContext::prepare(impl.camera, impl.environment);
+
+        if (layer == 0)
+            shadowLight = impl.renderShadows(lights, blendedStart, cascades);
+        gl::UseProgram(impl.mesh.id());
+        impl.setFrameUniforms(lights, shadowLight, cascades);
+        impl.renderMain(blendedStart, layer == 0);
+    }
     impl.antiAlias();
     impl.drawOverlays();
     impl.present();

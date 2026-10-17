@@ -250,6 +250,9 @@ struct k3::SoftwareRasterizer::Impl
     // Frame data, indexed by draw (position in `commands` once sorted).
     std::vector<DrawCommand>    commands;
     std::vector<Overlay>        overlays;
+    std::vector<Camera>         layerCameras;       // Of each layer, the frame's own first
+    std::vector<std::size_t>    layerStarts;        // Index in `commands` where each layer's draws begin
+    bool                        clearBackground = true;     // Only the first layer starts from the clear color / the sky
     std::vector<sw::DrawState>  drawStates;
     std::vector<DrawTransforms> transforms;
 
@@ -296,6 +299,16 @@ struct k3::SoftwareRasterizer::Impl
             sw::downsample2x2(color, outputWidth, outputHeight, output, pool);
         else if (antiAliasing == AntiAliasing::FXAA)
             sw::fxaa(color, outputWidth, outputHeight, output, pool);
+    }
+
+    // Looks through `layerCamera`: view, projection and what depends on them.
+    void useCamera(const Camera& layerCamera)
+    {
+        const float aspect = outputHeight ? static_cast<float>(outputWidth) / static_cast<float>(outputHeight) : 1.f;
+
+        camera = layerCamera;
+        view = layerCamera.view();
+        mainPass.viewProjection = layerCamera.projectionMatrix(aspect) * view;
     }
 
     /* Sky */
@@ -859,7 +872,8 @@ struct k3::SoftwareRasterizer::Impl
         const std::uint32_t width = mainPass.width;
         for (std::int32_t y = y0; y <= y1; ++y) {
             const std::size_t row = static_cast<std::size_t>(y) * width;
-            std::fill(color.begin() + row + x0, color.begin() + row + x1 + 1, environment.clearColor);
+            if (clearBackground)
+                std::fill(color.begin() + row + x0, color.begin() + row + x1 + 1, environment.clearColor);
             std::fill(depth.begin() + row + x0, depth.begin() + row + x1 + 1, 1.f);
             std::fill(visibility.begin() + row + x0, visibility.begin() + row + x1 + 1, nullptr);
         }
@@ -975,15 +989,21 @@ void k3::SoftwareRasterizer::beginFrame(const Camera& camera, const Environment&
     auto& impl = *m_impl;
     const float aspect = impl.outputHeight ? static_cast<float>(impl.outputWidth) / impl.outputHeight : 1.f;
 
-    impl.camera = camera;
     impl.environment = environment;
-    impl.view = camera.view();
-    impl.mainPass.viewProjection = camera.projectionMatrix(aspect) * impl.view;
+    impl.useCamera(camera);
     impl.shading = sw::ShadingContext::prepare(camera, environment);
     impl.prepareSky(aspect);
+    impl.layerCameras = {camera};
+    impl.layerStarts = {0};
     impl.commands.clear();
     impl.overlays.clear();
     impl.stats = {};
+}
+
+void k3::SoftwareRasterizer::beginLayer(const Camera& camera)
+{
+    m_impl->layerCameras.push_back(camera);
+    m_impl->layerStarts.push_back(m_impl->commands.size());
 }
 
 void k3::SoftwareRasterizer::draw(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material> material, const Math::Matrix4& transform)
@@ -1004,22 +1024,42 @@ void k3::SoftwareRasterizer::endFrame()
 {
     auto& impl = *m_impl;
     const auto start = std::chrono::steady_clock::now();
+    std::vector<DrawCommand> recorded = std::move(impl.commands);
 
-    impl.computeBounds();
+    // Each layer goes through the whole pipeline in turn, over the colors of the previous one. Only the first
+    // renders the shadow maps (from its own draws) and shows the sky; the others look through their own
+    // camera, with a depth buffer of their own.
+    for (std::size_t layer = 0; layer < impl.layerStarts.size(); ++layer) {
+        const std::size_t first = impl.layerStarts[layer];
+        const std::size_t last = layer + 1 < impl.layerStarts.size() ? impl.layerStarts[layer + 1] : recorded.size();
 
-    // Opaque and alpha-tested draws keep their order, blended ones go last, farthest first.
-    const auto firstBlended = std::stable_partition(impl.commands.begin(), impl.commands.end(), [](const DrawCommand& c) { return !isBlended(c); });
-    for (auto it = firstBlended; it != impl.commands.end(); ++it)
-        it->viewDepth = -impl.view.transformPoint(it->bounds.center()).z;
-    std::stable_sort(firstBlended, impl.commands.end(), [](const DrawCommand& a, const DrawCommand& b) { return a.viewDepth > b.viewDepth; });
+        impl.commands.assign(std::make_move_iterator(recorded.begin() + static_cast<std::ptrdiff_t>(first)), std::make_move_iterator(recorded.begin() + static_cast<std::ptrdiff_t>(last)));
+        if (layer > 0) {
+            sw::ShadowMap shadow = std::move(impl.shading.shadow);
 
-    const auto blendedStart = static_cast<std::size_t>(firstBlended - impl.commands.begin());
+            impl.useCamera(impl.layerCameras[layer]);
+            impl.shading = sw::ShadingContext::prepare(impl.camera, impl.environment);
+            impl.shading.shadow = std::move(shadow);
+            impl.sky.active = false;
+            impl.clearBackground = false;
+        }
+        impl.computeBounds();
 
-    impl.prepareDraws();
-    impl.renderShadows(blendedStart);
-    impl.planMainPass(blendedStart);
-    impl.runGeometry(impl.mainPass);
-    impl.pool.parallelFor(impl.mainPass.tileCount(), [&](std::size_t tile) { impl.renderTile(tile); });
+        // Opaque and alpha-tested draws keep their order, blended ones go last, farthest first.
+        const auto firstBlended = std::stable_partition(impl.commands.begin(), impl.commands.end(), [](const DrawCommand& c) { return !isBlended(c); });
+        for (auto it = firstBlended; it != impl.commands.end(); ++it)
+            it->viewDepth = -impl.view.transformPoint(it->bounds.center()).z;
+        std::stable_sort(firstBlended, impl.commands.end(), [](const DrawCommand& a, const DrawCommand& b) { return a.viewDepth > b.viewDepth; });
+
+        const auto blendedStart = static_cast<std::size_t>(firstBlended - impl.commands.begin());
+
+        impl.prepareDraws();
+        if (layer == 0)
+            impl.renderShadows(blendedStart);
+        impl.planMainPass(blendedStart);
+        impl.runGeometry(impl.mainPass);
+        impl.pool.parallelFor(impl.mainPass.tileCount(), [&](std::size_t tile) { impl.renderTile(tile); });
+    }
     impl.antiAlias();
     impl.drawOverlays();
 
@@ -1027,6 +1067,7 @@ void k3::SoftwareRasterizer::endFrame()
     impl.drawStates.clear();
     impl.commands.clear();
     impl.overlays.clear();
+    impl.clearBackground = true;
     impl.shading.shadow = sw::ShadowMap{};
     impl.collectBounds();
     impl.stats.frameMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
