@@ -33,6 +33,11 @@ namespace k3
         std::vector<Math::Vector4f>               weights{};     // Sum to 1
         std::vector<std::uint32_t>  indices{};   // Empty: positions are read three by three
 
+        // Renderers cache per-mesh data (GPU buffers, bounds), so a mesh drawn once is not read again unless
+        // this changes. Bump it after editing the vertex attributes in place; to change the number of
+        // vertices or the indices, build a new Mesh.
+        std::uint64_t revision = 0;
+
         [[nodiscard]] std::size_t vertexCount() const noexcept { return positions.size(); }
         [[nodiscard]] std::size_t indexCount() const noexcept { return indices.empty() ? positions.size() : indices.size(); }
         [[nodiscard]] std::size_t triangleCount() const noexcept { return indexCount() / 3; }

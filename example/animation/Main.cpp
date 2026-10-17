@@ -44,6 +44,7 @@ int main(int argc, char** argv)
 
     sf::Window window(sf::VideoMode(800, 600), "kronk3d animation", sf::Style::Default, sf::ContextSettings(24, 0, 0, 3, 3, sf::ContextSettings::Core));
     window.setActive(true);
+    window.setVerticalSyncEnabled(true);    // The GL path re-uploads the posed meshes every frame: don't run it uncapped
 
     const k3::GLLoader loader = [](const char* name) { return sf::Context::getFunction(name); };
     auto presenter = k3::ImagePresenter::create(loader);     // Shows the software backend's images

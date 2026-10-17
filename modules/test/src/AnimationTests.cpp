@@ -318,6 +318,23 @@ K3_TEST(animator_stop_returns_to_the_rest_pose)
     K3_CHECK_NEAR(drawn(animator, rasterizer)->positions[2].y, 1.f, 1e-6f);
 }
 
+K3_TEST(animator_reuses_its_posed_meshes)
+{
+    Animator animator(std::make_shared<AnimatedModel>(twoBones()));
+    RecordingRasterizer rasterizer;
+
+    animator.play("Lift");
+    animator.update(0.25f);
+
+    const auto first = drawn(animator, rasterizer);
+    const auto revision = first->revision;
+
+    animator.update(0.25f);
+    K3_CHECK(drawn(animator, rasterizer) == first);         // Same mesh, so the GPU buffers are reused
+    K3_CHECK(first->revision > revision);
+    K3_CHECK_NEAR(first->positions[2].y, 2.f, 1e-6f);       // And it holds the new pose
+}
+
 /* glTF */
 
 namespace

@@ -256,6 +256,46 @@ K3_TEST(gl_texture_changes_are_uploaded)
     K3_CHECK(image.texel(2, 2)[0] == 0 && image.texel(2, 2)[1] == 255);
 }
 
+K3_TEST(gl_mesh_edits_are_uploaded)
+{
+    if (!openGLAvailable())
+        return;
+
+    auto gpu = hardware(4, 4);
+    K3_REQUIRE(gpu);
+
+    k3::Camera camera;
+    camera.position = {0.f, 0.f, 1.f};
+    camera.projection = k3::Projection::Orthographic;
+    auto material = std::make_shared<k3::Material>();
+    material->diffuse = k3::Math::Color::Red;
+    material->unlit = true;
+    k3::Environment black;
+    black.clearColor = k3::Math::Color::Black;
+    auto mesh = std::make_shared<k3::Mesh>(k3::Mesh{
+        .positions = {{-1.f, -1.f, 0.f}, {1.f, -1.f, 0.f}, {1.f, 1.f, 0.f}, {-1.f, 1.f, 0.f}},
+        .indices = {0, 1, 2, 0, 2, 3},
+    });
+
+    auto render = [&] {
+        gpu->beginFrame(camera, black);
+        gpu->draw(mesh, material, k3::Math::Matrix4::identity());
+        gpu->endFrame();
+        return gpu->readPixels();
+    };
+    auto shift = [&](float x) {
+        for (auto& position : mesh->positions)
+            position.x += x;
+        ++mesh->revision;
+    };
+
+    K3_CHECK(render().texel(2, 2)[0] == 255);
+    shift(10.f);                                        // Out of view
+    K3_CHECK(render().texel(2, 2)[0] == 0);
+    shift(-10.f);
+    K3_CHECK(render().texel(2, 2)[0] == 255);
+}
+
 K3_TEST(gl_resize_changes_the_output_size)
 {
     if (!openGLAvailable())

@@ -167,8 +167,10 @@ void k3::Animator::evaluate()
 
         if (primitive.skin < 0 || !primitive.mesh || !primitive.mesh->hasSkin())
             continue;
-        m_posed[p] = std::make_shared<Mesh>(*primitive.mesh);
+        if (!m_posed[p])
+            m_posed[p] = std::make_shared<Mesh>(*primitive.mesh);
         skin(*primitive.mesh, *m_posed[p], joints[static_cast<std::size_t>(primitive.skin)]);
+        ++m_posed[p]->revision;
     }
     m_dirty = false;
 }
