@@ -1,0 +1,29 @@
+# Approximates the existing style. The code base was not reformatted: use `git clang-format` to
+# format only the lines you changed.
+BasedOnStyle: LLVM
+IndentWidth: 4
+ColumnLimit: 160
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterStruct: true
+  AfterNamespace: true
+  AfterFunction: true
+  AfterEnum: false
+  AfterControlStatement: Never
+  BeforeElse: false
+NamespaceIndentation: All
+IndentAccessModifiers: false
+AccessModifierOffset: 4
+AlignConsecutiveDeclarations: Consecutive
+AlignTrailingComments:
+  Kind: Leave
+SpacesBeforeTrailingComments: 4
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortEnumsOnASingleLine: false
+BinPackArguments: true
+BreakTemplateDeclarations: Yes
+SpaceAfterTemplateKeyword: false
+AlignArrayOfStructures: None
+PointerAlignment: Left
+SortIncludes: Never
