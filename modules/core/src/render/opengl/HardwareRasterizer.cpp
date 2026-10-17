@@ -59,6 +59,8 @@ namespace
         k3::Math::Bounds3f                  bounds{};
         float                               viewDepth = 0.f;
         bool                                visible = true;     // In the camera frustum: shadow passes ignore it
+        std::vector<k3::Math::Matrix4>      instances{};        // Not empty: one draw of all these placements (`transform` is unused)
+        std::vector<k3::Math::Matrix4>      visibleInstances{}; // Of them, those in the camera frustum
     };
 
     struct Overlay
@@ -136,7 +138,7 @@ namespace
 
     struct MeshUniforms
     {
-        GLint viewProjection, model, normalMatrix;
+        GLint viewProjection, model, normalMatrix, instanced;
         GLint cameraPosition, viewDirection, orthographic, ambient, fogColor, fog;
         GLint lightCount, lightType, lightPosition, lightToLight, lightDirection, lightRadiance, lightRange, lightCosInner, lightCosOuter;
         GLint shadowLight, shadowMap, shadowViewProjection, shadowSize, shadowDepthBias, shadowNormalOffset, shadowPcfRadius;
@@ -146,7 +148,7 @@ namespace
         GLint handedness, hasNormalMap, normalScale, normalMap;
 
         explicit MeshUniforms(const Program& p)
-            : viewProjection(p.uniform("uViewProjection")), model(p.uniform("uModel")), normalMatrix(p.uniform("uNormalMatrix")),
+            : viewProjection(p.uniform("uViewProjection")), model(p.uniform("uModel")), normalMatrix(p.uniform("uNormalMatrix")), instanced(p.uniform("uInstanced")),
               cameraPosition(p.uniform("uCameraPosition")), viewDirection(p.uniform("uViewDirection")),
               orthographic(p.uniform("uOrthographic")), ambient(p.uniform("uAmbient")),
               fogColor(p.uniform("uFogColor")), fog(p.uniform("uFog")),
@@ -173,10 +175,10 @@ namespace
 
     struct ShadowUniforms
     {
-        GLint viewProjection, model, alphaTest, diffuseAlpha, alphaCutoff, hasDiffuseMap, hasOpacityMap, diffuseMap, opacityMap;
+        GLint viewProjection, model, instanced, alphaTest, diffuseAlpha, alphaCutoff, hasDiffuseMap, hasOpacityMap, diffuseMap, opacityMap;
 
         explicit ShadowUniforms(const Program& p)
-            : viewProjection(p.uniform("uViewProjection")), model(p.uniform("uModel")), alphaTest(p.uniform("uAlphaTest")),
+            : viewProjection(p.uniform("uViewProjection")), model(p.uniform("uModel")), instanced(p.uniform("uInstanced")), alphaTest(p.uniform("uAlphaTest")),
               diffuseAlpha(p.uniform("uDiffuseAlpha")), alphaCutoff(p.uniform("uAlphaCutoff")),
               hasDiffuseMap(p.uniform("uHasDiffuseMap")), hasOpacityMap(p.uniform("uHasOpacityMap")),
               diffuseMap(p.uniform("uDiffuseMap")), opacityMap(p.uniform("uOpacityMap"))
@@ -193,6 +195,7 @@ struct k3::HardwareRasterizer::Impl
           sky(std::move(skyProgram)), overlay(std::move(overlayProgram)), meshUniforms(mesh), shadowUniforms(shadow)
     {
         GenVertexArrays(1, &fullscreenVao);
+        GenBuffers(1, &instanceVbo);
     }
 
     ~Impl()
@@ -209,6 +212,7 @@ struct k3::HardwareRasterizer::Impl
         if (shadowFbo)
             DeleteFramebuffers(1, &shadowFbo);
         DeleteVertexArrays(1, &fullscreenVao);
+        DeleteBuffers(1, &instanceVbo);
     }
 
     Program        mesh;
@@ -221,6 +225,7 @@ struct k3::HardwareRasterizer::Impl
     ShadowUniforms shadowUniforms;
     std::string    driver;
     GLuint         fullscreenVao = 0;
+    GLuint         instanceVbo = 0;     // Placements of an instanced draw, streamed
 
     AntiAliasing  antiAliasing = AntiAliasing::None;
     std::uint32_t width = 0, height = 0;                // Output size
@@ -558,6 +563,44 @@ struct k3::HardwareRasterizer::Impl
         DrawElements(TRIANGLES, gpu.count, UNSIGNED_INT, nullptr);
     }
 
+    // One call for all `placements`: they stream through a buffer read once per instance (locations 8 to 11,
+    // a column of the model matrix each). The mesh's own array object is left as it was.
+    void drawMeshInstanced(const GpuMesh& gpu, const std::vector<k3::Math::Matrix4>& placements)
+    {
+        if (placements.empty())
+            return;
+
+        // OpenGL wants columns: the matrices are row-major.
+        std::vector<float> columns;
+        columns.reserve(placements.size() * 16);
+        for (const k3::Math::Matrix4& m : placements) {
+            for (int column = 0; column < 4; ++column)
+                columns.insert(columns.end(), {m.values[column], m.values[4 + column], m.values[8 + column], m.values[12 + column]});
+        }
+
+        BindVertexArray(gpu.vao);
+        BindBuffer(ARRAY_BUFFER, instanceVbo);
+        BufferData(ARRAY_BUFFER, static_cast<GLsizeiptr>(columns.size() * sizeof(float)), columns.data(), STATIC_DRAW);
+        for (GLuint column = 0; column < 4; ++column) {
+            EnableVertexAttribArray(8 + column);
+            VertexAttribPointer(8 + column, 4, FLOAT, FALSE_, 16 * sizeof(float), reinterpret_cast<const void*>(column * 4 * sizeof(float)));
+            VertexAttribDivisor(8 + column, 1);
+        }
+        if (!gpu.hasNormals)
+            VertexAttrib4f(shaders::NORMAL, 0.f, 0.f, 0.f, 0.f);
+        if (!gpu.hasUVs)
+            VertexAttrib4f(shaders::UV, 0.f, 0.f, 0.f, 1.f);
+        if (!gpu.hasColors)
+            VertexAttrib4f(shaders::COLOR, 1.f, 1.f, 1.f, 1.f);
+        if (!gpu.hasTangents)
+            VertexAttrib4f(shaders::TANGENT, 0.f, 0.f, 0.f, 0.f);
+        DrawElementsInstanced(TRIANGLES, gpu.count, UNSIGNED_INT, nullptr, static_cast<GLsizei>(placements.size()));
+        for (GLuint column = 0; column < 4; ++column) {
+            VertexAttribDivisor(8 + column, 0);
+            DisableVertexAttribArray(8 + column);
+        }
+    }
+
     // Renders one shadow map per cascade. Returns the index of the shadow-casting light if they were
     // rendered, -1 otherwise.
     int renderShadows(const sw::ShadingContext& lights, std::size_t firstBlended, std::vector<ShadowCascade>& cascades)
@@ -616,6 +659,7 @@ struct k3::HardwareRasterizer::Impl
 
                 const bool alphaTest = material.alphaMode == AlphaMode::Mask;
                 setMatrix(shadowUniforms.model, command.transform);
+                Uniform1i(shadowUniforms.instanced, !command.instances.empty());
                 Uniform1i(shadowUniforms.alphaTest, alphaTest);
                 if (alphaTest) {
                     Uniform1f(shadowUniforms.diffuseAlpha, material.diffuse.a);
@@ -623,7 +667,10 @@ struct k3::HardwareRasterizer::Impl
                     Uniform1i(shadowUniforms.hasDiffuseMap, bindTexture(DIFFUSE_UNIT, material.diffuseMap));
                     Uniform1i(shadowUniforms.hasOpacityMap, bindTexture(OPACITY_UNIT, material.opacityMap));
                 }
-                drawMesh(*command.gpu);
+                if (command.instances.empty())
+                    drawMesh(*command.gpu);
+                else
+                    drawMeshInstanced(*command.gpu, command.instances);       // Every instance casts, seen or not
             }
         }
         return lights.shadowLight;
@@ -724,7 +771,11 @@ struct k3::HardwareRasterizer::Impl
         Uniform1i(u.hasNormalMap, normalMapped && bindTexture(NORMAL_UNIT, material.normalMap));
         Uniform1f(u.normalScale, material.normalScale);
         Uniform1f(u.handedness, handedness(command.transform));
-        drawMesh(gpu);
+        Uniform1i(u.instanced, !command.instances.empty());
+        if (command.instances.empty())
+            drawMesh(gpu);
+        else
+            drawMeshInstanced(gpu, command.visibleInstances);
     }
 
     // Binds the sky cube map on SKY_UNIT (uploading it when the skybox changed); false without a valid skybox.
@@ -1008,6 +1059,28 @@ void k3::HardwareRasterizer::beginFrame(const Camera& camera, const Environment&
     impl.stats = {};
 }
 
+void k3::HardwareRasterizer::drawInstances(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material> material, std::span<const Math::Matrix4> transforms)
+{
+    if (!mesh || transforms.empty())
+        return;
+
+    auto& impl = *m_impl;
+    const bool blended = material && material->alphaMode == AlphaMode::Blend;       // Blended draws are sorted one by one
+    const bool mirrored = std::any_of(transforms.begin(), transforms.end(), [](const Math::Matrix4& t) { return handedness(t) < 0.f; });
+
+    impl.stats.drawCalls += transforms.size();
+    impl.stats.triangles += transforms.size() * mesh->triangleCount();
+    if (blended || mirrored) {
+        for (const Math::Matrix4& transform : transforms)
+            impl.commands.push_back({mesh, material, transform});
+        return;
+    }
+
+    DrawCommand command{std::move(mesh), std::move(material), transforms.front()};
+    command.instances.assign(transforms.begin(), transforms.end());
+    impl.commands.push_back(std::move(command));
+}
+
 void k3::HardwareRasterizer::draw(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material> material, const Math::Matrix4& transform)
 {
     if (!mesh)
@@ -1037,9 +1110,26 @@ void k3::HardwareRasterizer::endFrame()
 
     for (DrawCommand& command : impl.commands) {
         command.gpu = &impl.meshFor(command.mesh);
-        command.bounds = command.gpu->bounds.transformed(command.transform);
-        command.visible = frustum.intersects(command.bounds);
-        impl.stats.culledDraws += !command.visible;
+        if (command.instances.empty()) {
+            command.bounds = command.gpu->bounds.transformed(command.transform);
+            command.visible = frustum.intersects(command.bounds);
+            impl.stats.culledDraws += !command.visible;
+            continue;
+        }
+
+        // Instanced: the bounds cover every placement (the shadow passes want them all), the main pass
+        // draws the ones in view.
+        command.bounds = {};
+        command.visibleInstances.clear();
+        for (const Math::Matrix4& placement : command.instances) {
+            const Math::Bounds3f bounds = command.gpu->bounds.transformed(placement);
+
+            command.bounds.merge(bounds);
+            if (frustum.intersects(bounds))
+                command.visibleInstances.push_back(placement);
+        }
+        command.visible = !command.visibleInstances.empty();
+        impl.stats.culledDraws += command.instances.size() - command.visibleInstances.size();
     }
 
     // Same ordering as the software backend: opaque in submission order, blended farthest first.

@@ -24,11 +24,13 @@ layout(location = 1) in vec3 aNormal;
 layout(location = 2) in vec2 aUV;
 layout(location = 3) in vec4 aColor;
 layout(location = 4) in vec4 aTangent;
+layout(location = 8) in mat4 aInstanceModel;      // Locations 8 to 11, one per instance (IRasterizer::drawInstances)
 
 uniform mat4  uViewProjection;
 uniform mat4  uModel;
 uniform mat4  uNormalMatrix;
 uniform float uHandedness;
+uniform bool  uInstanced;
 
 out vec3 vWorld;
 out vec3 vNormal;
@@ -38,14 +40,16 @@ out vec4 vTangent;
 
 void main()
 {
-    vec4 world = uModel * vec4(aPosition, 1.0);
+    mat4 model = uInstanced ? aInstanceModel : uModel;
+    mat3 normalMatrix = uInstanced ? transpose(inverse(mat3(aInstanceModel))) : mat3(uNormalMatrix);
+    vec4 world = model * vec4(aPosition, 1.0);
 
     vWorld = world.xyz / world.w;
-    vNormal = mat3(uNormalMatrix) * aNormal;
+    vNormal = normalMatrix * aNormal;
     vUV = aUV;
     vColor = aColor;
-    // A mirroring transform flips the frame's handedness.
-    vTangent = vec4(mat3(uModel) * aTangent.xyz, aTangent.w * uHandedness);
+    // A mirroring transform flips the frame's handedness (instances are never mirrored).
+    vTangent = vec4(mat3(model) * aTangent.xyz, aTangent.w * (uInstanced ? 1.0 : uHandedness));
     gl_Position = uViewProjection * world;
 }
 )glsl";
@@ -252,9 +256,11 @@ void main()
 layout(location = 0) in vec3 aPosition;
 layout(location = 2) in vec2 aUV;
 layout(location = 3) in vec4 aColor;
+layout(location = 8) in mat4 aInstanceModel;
 
 uniform mat4 uViewProjection;
 uniform mat4 uModel;
+uniform bool uInstanced;
 
 out vec2 vUV;
 out float vAlpha;
@@ -263,7 +269,7 @@ void main()
 {
     vUV = aUV;
     vAlpha = aColor.a;
-    gl_Position = uViewProjection * (uModel * vec4(aPosition, 1.0));
+    gl_Position = uViewProjection * ((uInstanced ? aInstanceModel : uModel) * vec4(aPosition, 1.0));
 }
 )glsl";
 

@@ -9,6 +9,12 @@ void k3::IRasterizer::draw(const Model& model, const Math::Matrix4& transform)
             this->draw(primitive.mesh, primitive.material, transform);
 }
 
+void k3::IRasterizer::drawInstances(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material> material, std::span<const Math::Matrix4> transforms)
+{
+    for (const Math::Matrix4& transform : transforms)
+        draw(mesh, material, transform);
+}
+
 void k3::IRasterizer::drawRect(const Rect& destination, const Math::Color& color)
 {
     draw2D(nullptr, destination, {}, color);
