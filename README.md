@@ -186,6 +186,27 @@ Textures use their own sampler (`Nearest` for pixel art) and keep their alpha.
 | `ZQSD` / `WASD`, `Space`, `Shift` | Move |
 | Arrow keys, right mouse drag | Look around |
 
+### Arena
+
+`kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--screenshot file.png [--seconds S]]`
+
+A third-person showcase: you drive the robot of the Godot 3D platformer demo (`example/assets/robot`,
+MIT) around a stone arena with walls, stairs, 170 crates, torch pillars and a glass panel. It uses the
+sun with cascaded shadows, a gradient skybox, height fog, normal maps, point lights, a transparent
+surface, skeletal animation (`idle`, `walk`, `run`, `jump`, `falling`), frustum culling and the 2D
+overlay (counters drawn with a pixel font, and a minimap).
+
+| Key | Action |
+|---|---|
+| `ZQSD` / `WASD`, `Shift`, `Space` | Move relative to the camera, run, jump |
+| Mouse, arrow keys | Camera |
+| `T` | Day, sunset, night |
+| `F` | Fog on / off |
+| `V` | Anti-aliasing: none, FXAA, SSAA |
+| `H` | Hide / show the HUD (frames per second, draw calls, draws culled) |
+
+With `--screenshot` a scripted run is rendered and saved; the software backend then needs no window.
+
 ## Benchmark
 
 `kronk3d_bench <scene.obj> [--size WxH] [--frames N] [--threads N] [--no-shadows] [--cascades N] [--shadow-resolution N] [--aa none|fxaa|ssaa] [--screenshot prefix]`
@@ -231,6 +252,6 @@ modules/
     src/      CPU unit tests (they also see the private headers)
     gl/       OpenGL tests (including a pixel comparison with the software backend)
     package/  Consumer of the installed CMake package (CI)
-example/      Interactive demo (SFML window)
+example/      Interactive demos (SFML window): the scene viewer, a glTF viewer and the third-person arena
 tools/bench/  Benchmark (+ Sponza download script)
 ```
