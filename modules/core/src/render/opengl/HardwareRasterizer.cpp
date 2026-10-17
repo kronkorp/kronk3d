@@ -188,9 +188,9 @@ namespace
 
 struct k3::HardwareRasterizer::Impl
 {
-    Impl(Program meshProgram, Program shadowProgram, Program ssaaProgram, Program fxaaProgram, Program skyProgram, Program overlayProgram)
+    Impl(Program meshProgram, Program shadowProgram, Program ssaaProgram, Program fxaaProgram, Program skyProgram, Program overlayProgram, Program tonemapProgram)
         : mesh(std::move(meshProgram)), shadow(std::move(shadowProgram)), ssaa(std::move(ssaaProgram)), fxaa(std::move(fxaaProgram)),
-          sky(std::move(skyProgram)), overlay(std::move(overlayProgram)), meshUniforms(mesh), shadowUniforms(shadow)
+          sky(std::move(skyProgram)), overlay(std::move(overlayProgram)), tonemap(std::move(tonemapProgram)), meshUniforms(mesh), shadowUniforms(shadow)
     {
         GenVertexArrays(1, &fullscreenVao);
     }
@@ -217,6 +217,7 @@ struct k3::HardwareRasterizer::Impl
     Program        fxaa;
     Program        sky;
     Program        overlay;
+    Program        tonemap;
     MeshUniforms   meshUniforms;
     ShadowUniforms shadowUniforms;
     std::string    driver;
@@ -226,6 +227,8 @@ struct k3::HardwareRasterizer::Impl
     std::uint32_t width = 0, height = 0;                // Output size
     std::uint32_t renderWidth = 0, renderHeight = 0;    // Twice the output with SSAA
     GLuint fbo = 0, colorTexture = 0, depthTexture = 0;
+    bool   hdr = false;                                 // The scene renders in floating point (tone mapping on)
+    GLuint hdrTexture = 0, ldrFbo = 0;                  // Then: the float target of `fbo`, and the target of the mapped frame (colorTexture)
     GLuint postFbo = 0, postTexture = 0;                // Anti-aliased frame
     GLuint shadowFbo = 0, shadowTexture = 0;           // Texture array: one layer per cascade
     std::uint32_t shadowSize = 0;
@@ -261,12 +264,16 @@ struct k3::HardwareRasterizer::Impl
             DeleteFramebuffers(1, &postFbo);
         if (postTexture)
             DeleteTextures(1, &postTexture);
-        fbo = colorTexture = depthTexture = postFbo = postTexture = 0;
+        if (hdrTexture)
+            DeleteTextures(1, &hdrTexture);
+        if (ldrFbo)
+            DeleteFramebuffers(1, &ldrFbo);
+        fbo = colorTexture = depthTexture = postFbo = postTexture = hdrTexture = ldrFbo = 0;
     }
 
     [[nodiscard]] GLuint finalFbo() const noexcept
     {
-        return antiAliasing == AntiAliasing::None ? fbo : postFbo;
+        return antiAliasing != AntiAliasing::None ? postFbo : hdr ? ldrFbo : fbo;
     }
 
     static GLuint makeTexture(GLint internalFormat, std::uint32_t w, std::uint32_t h, GLenum format, GLenum type, GLint filter = NEAREST)
@@ -301,10 +308,24 @@ struct k3::HardwareRasterizer::Impl
         depthTexture = makeTexture(static_cast<GLint>(DEPTH_COMPONENT24), renderWidth, renderHeight, DEPTH_COMPONENT, FLOAT);
         GenFramebuffers(1, &fbo);
         BindFramebuffer(FRAMEBUFFER, fbo);
-        FramebufferTexture2D(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, colorTexture, 0);
+        if (hdr) {
+            // The scene lives in floating point; colorTexture then holds the tone-mapped frame.
+            hdrTexture = makeTexture(static_cast<GLint>(RGBA16F), renderWidth, renderHeight, RGBA, FLOAT);
+            FramebufferTexture2D(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, hdrTexture, 0);
+        } else {
+            FramebufferTexture2D(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, colorTexture, 0);
+        }
         FramebufferTexture2D(FRAMEBUFFER, DEPTH_ATTACHMENT, TEXTURE_2D, depthTexture, 0);
         if (CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE)
             log(LogLevel::Error, "OpenGL: incomplete render target {}x{}", renderWidth, renderHeight);
+
+        if (hdr) {
+            GenFramebuffers(1, &ldrFbo);
+            BindFramebuffer(FRAMEBUFFER, ldrFbo);
+            FramebufferTexture2D(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, colorTexture, 0);
+            if (CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE)
+                log(LogLevel::Error, "OpenGL: incomplete tone-mapped target {}x{}", renderWidth, renderHeight);
+        }
 
         if (antiAliasing != AntiAliasing::None) {
             postTexture = makeTexture(static_cast<GLint>(SRGB8_ALPHA8), w, h, RGBA, UNSIGNED_BYTE);
@@ -315,6 +336,31 @@ struct k3::HardwareRasterizer::Impl
                 log(LogLevel::Error, "OpenGL: incomplete anti-aliasing target {}x{}", w, h);
         }
         BindFramebuffer(FRAMEBUFFER, 0);
+    }
+
+    // The high dynamic range scene to a displayable frame (colorTexture), before anti-aliasing.
+    void toneMap()
+    {
+        if (!hdr)
+            return;
+
+        const GLint curve = environment.toneMapping == ToneMapping::Reinhard ? 1 : 2;
+
+        BindFramebuffer(FRAMEBUFFER, ldrFbo);
+        Viewport(0, 0, static_cast<GLsizei>(renderWidth), static_cast<GLsizei>(renderHeight));
+        Enable(FRAMEBUFFER_SRGB);
+        Disable(DEPTH_TEST);
+        Disable(CULL_FACE);
+        Disable(BLEND);
+        UseProgram(tonemap.id());
+        Uniform1i(tonemap.uniform("uSource"), 0);
+        Uniform1f(tonemap.uniform("uExposure"), environment.exposure);
+        Uniform1i(tonemap.uniform("uCurve"), curve);
+        ActiveTexture(TEXTURE0);
+        BindTexture(TEXTURE_2D, hdrTexture);
+        BindVertexArray(fullscreenVao);
+        DrawArrays(TRIANGLES, 0, 3);
+        Disable(FRAMEBUFFER_SRGB);
     }
 
     // SSAA resolve or FXAA, from the rendered frame into the output frame.
@@ -952,7 +998,11 @@ k3::Result<std::unique_ptr<k3::HardwareRasterizer>> k3::HardwareRasterizer::crea
     if (!overlay)
         return Error{"OpenGL: overlay shader: " + overlay.error()};
 
-    auto impl = std::make_unique<Impl>(std::move(*mesh), std::move(*shadow), std::move(*ssaa), std::move(*fxaa), std::move(*sky), std::move(*overlay));
+    auto tonemap = gl::Program::create(gl::shaders::FULLSCREEN_VERTEX, gl::shaders::TONEMAP_FRAGMENT);
+    if (!tonemap)
+        return Error{"OpenGL: tone mapping shader: " + tonemap.error()};
+
+    auto impl = std::make_unique<Impl>(std::move(*mesh), std::move(*shadow), std::move(*ssaa), std::move(*fxaa), std::move(*sky), std::move(*overlay), std::move(*tonemap));
     impl->driver = std::string(version) + " / " + (renderer ? renderer : "unknown");
     impl->resize(width, height);
     log(LogLevel::Info, "OpenGL rasterizer on {}", impl->driver);
@@ -999,6 +1049,11 @@ void k3::HardwareRasterizer::beginFrame(const Camera& camera, const Environment&
     auto& impl = *m_impl;
     const float aspect = impl.height ? static_cast<float>(impl.width) / impl.height : 1.f;
 
+    // Floating-point targets are only allocated while a tone mapping is asked for.
+    if ((environment.toneMapping != ToneMapping::None) != impl.hdr) {
+        impl.hdr = !impl.hdr;
+        impl.resize(impl.width, impl.height);
+    }
     impl.camera = camera;
     impl.environment = environment;
     impl.view = camera.view();
@@ -1057,6 +1112,7 @@ void k3::HardwareRasterizer::endFrame()
     gl::UseProgram(impl.mesh.id());
     impl.setFrameUniforms(lights, shadowLight, cascades);
     impl.renderMain(blendedStart);
+    impl.toneMap();
     impl.antiAlias();
     impl.drawOverlays();
     impl.present();

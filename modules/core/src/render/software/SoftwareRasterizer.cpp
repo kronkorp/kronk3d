@@ -8,6 +8,7 @@
 #include "render/CubeMap.hpp"
 #include "render/Frustum.hpp"
 #include "render/ShadowFit.hpp"
+#include "render/ToneMap.hpp"
 #include "utils/Srgb.hpp"
 #include <algorithm>
 #include <chrono>
@@ -288,6 +289,35 @@ struct k3::SoftwareRasterizer::Impl
     [[nodiscard]] const std::vector<Math::Color>& finalColor() const noexcept
     {
         return antiAliasing == AntiAliasing::None ? color : output;
+    }
+
+    // A shaded color as it is stored: clamped, or kept in high dynamic range for the tone mapping to bring back.
+    [[nodiscard]] Math::Color finish(const Math::Color& c) const noexcept
+    {
+        if (environment.toneMapping == ToneMapping::None)
+            return saturate(c);
+        return {std::max(c.r, 0.f), std::max(c.g, 0.f), std::max(c.b, 0.f), std::clamp(c.a, 0.f, 1.f)};
+    }
+
+    // Brings the scene from high dynamic range to [0, 1], before anti-aliasing (which wants displayable colors).
+    void toneMap()
+    {
+        if (environment.toneMapping == ToneMapping::None)
+            return;
+
+        const ToneMapping mode = environment.toneMapping;
+        const float exposure = environment.exposure;
+        const std::size_t width = mainPass.width;
+
+        pool.parallelFor(mainPass.height, [&](std::size_t y) {
+            for (std::size_t x = 0; x < width; ++x) {
+                Math::Color& c = color[y * width + x];
+
+                c.r = k3::toneMap(mode, c.r, exposure);
+                c.g = k3::toneMap(mode, c.g, exposure);
+                c.b = k3::toneMap(mode, c.b, exposure);
+            }
+        });
     }
 
     void antiAlias()
@@ -899,7 +929,7 @@ struct k3::SoftwareRasterizer::Impl
                 std::int64_t e[3];
                 t->edgesAt(x, y, e);
 
-                Math::Color c = saturate(sw::shade(shading, *drawStates[t->draw].material, fragmentAt(*t, e)));
+                Math::Color c = finish(sw::shade(shading, *drawStates[t->draw].material, fragmentAt(*t, e)));
                 c.a = 1.f;
                 color[index] = c;
             }
@@ -916,7 +946,7 @@ struct k3::SoftwareRasterizer::Impl
                 if (!(depthAt(t, e) < depth[index]))
                     return;
 
-                const Math::Color src = saturate(sw::shade(shading, material, fragmentAt(t, e)));
+                const Math::Color src = finish(sw::shade(shading, material, fragmentAt(t, e)));
                 const float a = src.a;
                 Math::Color& dst = color[index];
 
@@ -1020,6 +1050,7 @@ void k3::SoftwareRasterizer::endFrame()
     impl.planMainPass(blendedStart);
     impl.runGeometry(impl.mainPass);
     impl.pool.parallelFor(impl.mainPass.tileCount(), [&](std::size_t tile) { impl.renderTile(tile); });
+    impl.toneMap();
     impl.antiAlias();
     impl.drawOverlays();
 

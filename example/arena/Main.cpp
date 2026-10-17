@@ -1,6 +1,6 @@
 // Third-person showcase of the renderer: a robot you drive around an arena.
 //     kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night]
-//                   [--screenshot file.png [--seconds S]]
+//                   [--tone none|reinhard|aces] [--screenshot file.png [--seconds S]]
 //
 // ZQSD / WASD: move (relative to the camera)    Shift: run     Space: jump
 // Mouse / arrows: camera                         T: time of day    F: fog    V: anti-aliasing    H: HUD
@@ -44,6 +44,7 @@ namespace
         k3::Backend      backend = k3::Backend::OpenGL;
         k3::AntiAliasing antiAliasing = k3::AntiAliasing::FXAA;
         std::size_t      timeOfDay = 0;
+        k3::ToneMapping  toneMapping = k3::ToneMapping::None;
         std::string      screenshot{};
         float            seconds = 3.f;
     };
@@ -109,6 +110,16 @@ namespace
                 if (found == TIMES.end())
                     return std::nullopt;
                 options.timeOfDay = static_cast<std::size_t>(found - TIMES.begin());
+            } else if (arg == "--tone" && hasValue) {
+                const std::string_view value = argv[++i];
+                if (value == "none")
+                    options.toneMapping = k3::ToneMapping::None;
+                else if (value == "reinhard")
+                    options.toneMapping = k3::ToneMapping::Reinhard;
+                else if (value == "aces")
+                    options.toneMapping = k3::ToneMapping::ACES;
+                else
+                    return std::nullopt;
             } else if (arg == "--screenshot" && hasValue) {
                 options.screenshot = argv[++i];
             } else if (arg == "--seconds" && hasValue) {
@@ -141,6 +152,12 @@ namespace
 
             void nextTimeOfDay() { setTimeOfDay((m_time + 1) % TIMES.size()); }
             void toggleFog() { m_fog = !m_fog; }
+            void setToneMapping(k3::ToneMapping mode) { m_tone = mode; }
+            void nextToneMapping()
+            {
+                m_tone = m_tone == k3::ToneMapping::None ? k3::ToneMapping::ACES : m_tone == k3::ToneMapping::ACES ? k3::ToneMapping::Reinhard : k3::ToneMapping::None;
+            }
+            [[nodiscard]] k3::ToneMapping toneMapping() const noexcept { return m_tone; }
 
             [[nodiscard]] float cameraYaw() const noexcept { return m_yaw; }
             [[nodiscard]] const Player& player() const noexcept { return m_player; }
@@ -206,6 +223,9 @@ namespace
                 k3::Environment environment;
 
                 environment.ambient = time.ambient;
+                // The sun is brighter than 1: without tone mapping it clamps, with it the highlights keep their shape.
+                environment.toneMapping = m_tone;
+                environment.exposure = 0.75f;
                 environment.skybox = m_sky;
                 environment.clearColor = time.horizon;
                 environment.lights = {k3::Light::directional(time.sunDirection, time.sunColor, time.sunIntensity)};
@@ -236,6 +256,7 @@ namespace
             std::size_t  m_time = 0;
             bool         m_lighterShadows;
             bool         m_fog = true;
+            k3::ToneMapping m_tone = k3::ToneMapping::None;
             float        m_yaw = 0.4f;
             float        m_pitch = -0.4f;
     };
@@ -298,7 +319,7 @@ int main(int argc, char** argv)
     const auto options = parseOptions(argc, argv);
 
     if (!options) {
-        std::cerr << "usage: " << argv[0] << " [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--screenshot file.png [--seconds S]]" << std::endl;
+        std::cerr << "usage: " << argv[0] << " [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--tone none|reinhard|aces] [--screenshot file.png [--seconds S]]" << std::endl;
         return 2;
     }
 
@@ -309,6 +330,7 @@ int main(int argc, char** argv)
         return 1;
 
     World world(Level(assets), std::move(*player), options->timeOfDay, options->backend == k3::Backend::Software);
+    world.setToneMapping(options->toneMapping);
     const bool windowless = !options->screenshot.empty() && options->backend == k3::Backend::Software;
     constexpr unsigned WIDTH = 1280, HEIGHT = 720;
 
@@ -373,6 +395,8 @@ int main(int argc, char** argv)
                 world.nextTimeOfDay();
             else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::F)
                 world.toggleFog();
+            else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::M)
+                world.nextToneMapping();
             else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::H)
                 showHud = !showHud;
             else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::V) {

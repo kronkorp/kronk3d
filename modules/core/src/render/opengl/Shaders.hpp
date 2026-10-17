@@ -318,6 +318,29 @@ void main()
 }
 )glsl";
 
+    // Tone mapping: the high dynamic range scene to a displayable one, mirroring render/ToneMap.hpp. The target
+    // is sRGB: the encoding happens on write.
+    inline constexpr const char* TONEMAP_FRAGMENT = R"glsl(
+#version 330 core
+uniform sampler2D uSource;
+uniform float uExposure;
+uniform int   uCurve;       // 1 Reinhard, 2 ACES
+out vec4 fragColor;
+
+void main()
+{
+    vec4 hdr = texelFetch(uSource, ivec2(gl_FragCoord.xy), 0);
+    vec3 x = max(hdr.rgb, vec3(0.0)) * uExposure;
+    vec3 mapped;
+
+    if (uCurve == 1)
+        mapped = x / (1.0 + x);
+    else
+        mapped = clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+    fragColor = vec4(mapped, clamp(hdr.a, 0.0, 1.0));
+}
+)glsl";
+
     // FXAA, mirroring render/software/PostProcess.cpp. That code works with y pointing down, OpenGL rows
     // go up: "up" neighbours and the y of the direction are flipped so both read the same texels.
     inline constexpr const char* FXAA_FRAGMENT = R"glsl(
