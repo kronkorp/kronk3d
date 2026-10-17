@@ -5,6 +5,7 @@
 #include "Sampling.hpp"
 #include "Shading.hpp"
 #include "ThreadPool.hpp"
+#include "render/Frustum.hpp"
 #include "render/ShadowFit.hpp"
 #include "utils/Srgb.hpp"
 #include <algorithm>
@@ -31,6 +32,7 @@ namespace
         k3::Math::Matrix4                   transform;
         k3::Math::Bounds3f                  bounds{};           // World space, computed in endFrame()
         float                               viewDepth = 0.f;    // Blended draws are sorted on it
+        bool                                visible = true;     // In the camera frustum: shadow passes ignore it
     };
 
     struct Overlay
@@ -372,13 +374,19 @@ struct k3::SoftwareRasterizer::Impl
     void planMainPass(std::size_t firstBlended)
     {
         mainPass.begin(commands.size());
-        for (std::size_t d = 0; d < commands.size(); ++d)
-            addVertices(mainPass, d);
-        for (std::size_t d = 0; d < firstBlended; ++d)
-            addGeometry(mainPass, d, drawStates[d].material->doubleSided ? Faces::All : Faces::Front, false);
+        for (std::size_t d = 0; d < commands.size(); ++d) {
+            if (commands[d].visible)
+                addVertices(mainPass, d);
+        }
+        for (std::size_t d = 0; d < firstBlended; ++d) {
+            if (commands[d].visible)
+                addGeometry(mainPass, d, drawStates[d].material->doubleSided ? Faces::All : Faces::Front, false);
+        }
         // A double-sided blended mesh (a glass box) shows its inside through its outside: draw the faces
         // turned away from the camera first, so they end up behind whatever the triangle order is.
         for (std::size_t d = firstBlended; d < commands.size(); ++d) {
+            if (!commands[d].visible)
+                continue;
             if (drawStates[d].material->doubleSided)
                 addGeometry(mainPass, d, Faces::Back, true);
             addGeometry(mainPass, d, Faces::Front, true);
@@ -651,10 +659,15 @@ struct k3::SoftwareRasterizer::Impl
             cached.bounds = cached.source.lock()->bounds();
             cached.valid = true;
         });
+        const Frustum frustum(mainPass.viewProjection);
+
         pool.parallelFor(commands.size(), [&](std::size_t d) {
             DrawCommand& command = commands[d];
             command.bounds = drawBounds[d]->bounds.transformed(command.transform);
+            command.visible = frustum.intersects(command.bounds);
         });
+        for (const DrawCommand& command : commands)
+            stats.culledDraws += !command.visible;
     }
 
     void collectBounds()
