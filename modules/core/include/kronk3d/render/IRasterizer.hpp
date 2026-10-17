@@ -90,6 +90,14 @@ namespace k3
 
             virtual void beginFrame(const Camera& camera, const Environment& environment) = 0;
 
+            // Starts a layer: what is drawn from now on goes over everything recorded before, seen by `camera`
+            // with a cleared depth buffer, so it never goes through the scene. For a first-person weapon:
+            // the player's camera with another `fovY` and `nearPlane`, the weapon placed in the world in front
+            // of it. The layer shares the frame's environment: the lights (in world space), the fog, and the
+            // shadows, which it receives but does not cast. The skybox only shows behind the first layer.
+            // Layers can be stacked; a layer's draws are culled with its own camera.
+            virtual void beginLayer(const Camera& camera) = 0;
+
             // A null material draws with a default (white, lit) one.
             virtual void draw(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material> material, const Math::Matrix4& transform) = 0;
 

@@ -34,6 +34,7 @@ namespace
             void setAntiAliasing(AntiAliasing) override {}
             AntiAliasing antiAliasing() const noexcept override { return AntiAliasing::None; }
             void beginFrame(const Camera&, const Environment&) override { calls.clear(); }
+            void beginLayer(const Camera&) override {}
             void draw(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material>, const Matrix4& transform) override
             {
                 calls.push_back({std::move(mesh), transform});
