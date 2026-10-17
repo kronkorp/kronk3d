@@ -188,11 +188,22 @@ namespace
 
 struct k3::HardwareRasterizer::Impl
 {
-    Impl(Program meshProgram, Program shadowProgram, Program ssaaProgram, Program fxaaProgram, Program skyProgram, Program overlayProgram)
+    Impl(Program meshProgram, Program shadowProgram, Program ssaaProgram, Program fxaaProgram, Program skyProgram, Program overlayProgram, Program lineProgram)
         : mesh(std::move(meshProgram)), shadow(std::move(shadowProgram)), ssaa(std::move(ssaaProgram)), fxaa(std::move(fxaaProgram)),
-          sky(std::move(skyProgram)), overlay(std::move(overlayProgram)), meshUniforms(mesh), shadowUniforms(shadow)
+          sky(std::move(skyProgram)), overlay(std::move(overlayProgram)), line(std::move(lineProgram)), meshUniforms(mesh), shadowUniforms(shadow)
     {
         GenVertexArrays(1, &fullscreenVao);
+
+        // Debug lines: position (3 floats) and color (4 floats) per vertex, in one streamed buffer.
+        GenVertexArrays(1, &lineVao);
+        GenBuffers(1, &lineVbo);
+        BindVertexArray(lineVao);
+        BindBuffer(ARRAY_BUFFER, lineVbo);
+        EnableVertexAttribArray(0);
+        VertexAttribPointer(0, 3, FLOAT, FALSE_, LINE_STRIDE, nullptr);
+        EnableVertexAttribArray(1);
+        VertexAttribPointer(1, 4, FLOAT, FALSE_, LINE_STRIDE, reinterpret_cast<const void*>(3 * sizeof(float)));
+        BindVertexArray(0);
     }
 
     ~Impl()
@@ -209,6 +220,8 @@ struct k3::HardwareRasterizer::Impl
         if (shadowFbo)
             DeleteFramebuffers(1, &shadowFbo);
         DeleteVertexArrays(1, &fullscreenVao);
+        DeleteVertexArrays(1, &lineVao);
+        DeleteBuffers(1, &lineVbo);
     }
 
     Program        mesh;
@@ -217,10 +230,13 @@ struct k3::HardwareRasterizer::Impl
     Program        fxaa;
     Program        sky;
     Program        overlay;
+    Program        line;
     MeshUniforms   meshUniforms;
     ShadowUniforms shadowUniforms;
     std::string    driver;
     GLuint         fullscreenVao = 0;
+    GLuint         lineVao = 0, lineVbo = 0;
+    static constexpr GLsizei LINE_STRIDE = 7 * sizeof(float);
 
     AntiAliasing  antiAliasing = AntiAliasing::None;
     std::uint32_t width = 0, height = 0;                // Output size
@@ -248,6 +264,15 @@ struct k3::HardwareRasterizer::Impl
     Math::Matrix4      viewProjection = Math::Matrix4::identity();
     std::vector<DrawCommand> commands;
     std::vector<Overlay>     overlays;
+    struct Line
+    {
+        DebugLine   line;
+        bool        depthTested;
+        std::size_t layer;
+    };
+    std::vector<Line>        lines;             // Debug lines, drawn after the geometry of their layer
+    std::vector<Camera>      layerCameras;      // Of each layer, the frame's own first
+    std::vector<std::size_t> layerStarts;       // Index in `commands` where each layer's draws begin
     FrameStats         stats{};
 
     /* Render target */
@@ -835,7 +860,8 @@ struct k3::HardwareRasterizer::Impl
         UseProgram(mesh.id());
     }
 
-    void renderMain(std::size_t firstBlended)
+    // `firstLayer`: start from the clear color and draw the sky; a later layer only clears the depth.
+    void renderMain(std::size_t firstBlended, bool firstLayer)
     {
         BindFramebuffer(FRAMEBUFFER, fbo);
         Viewport(0, 0, static_cast<GLsizei>(renderWidth), static_cast<GLsizei>(renderHeight));
@@ -846,7 +872,7 @@ struct k3::HardwareRasterizer::Impl
         DepthMask(TRUE_);
         ClearColor(environment.clearColor.r, environment.clearColor.g, environment.clearColor.b, environment.clearColor.a);
         ClearDepth(1.0);
-        Clear(COLOR_BUFFER_BIT | DEPTH_BUFFER_BIT);
+        Clear(firstLayer ? COLOR_BUFFER_BIT | DEPTH_BUFFER_BIT : DEPTH_BUFFER_BIT);
         Enable(DEPTH_TEST);
         DepthFunc(LESS);
         FrontFace(CCW);
@@ -864,7 +890,8 @@ struct k3::HardwareRasterizer::Impl
             drawShaded(commands[d]);
         }
 
-        drawSky();
+        if (firstLayer)
+            drawSky();
 
         // Blended geometry, farthest first, depth-tested but not written. A double-sided blended mesh
         // draws its back faces first so they end up behind its front faces.
@@ -934,6 +961,47 @@ struct k3::HardwareRasterizer::Impl
         Disable(FRAMEBUFFER_SRGB);
     }
 
+    // Debug lines of a layer, over its geometry: two batches, the depth-tested ones then the others.
+    void drawDebugLines(std::size_t layer)
+    {
+        std::vector<float> vertices;
+
+        Enable(FRAMEBUFFER_SRGB);       // Blend in linear space, like everything else
+        Disable(CULL_FACE);
+        DepthMask(FALSE_);
+        Enable(BLEND);
+        BlendFuncSeparate(SRC_ALPHA, ONE_MINUS_SRC_ALPHA, ONE, ONE_MINUS_SRC_ALPHA);
+        DepthFunc(LEQUAL);
+
+        for (const bool depthTested : {true, false}) {
+            vertices.clear();
+            for (const Line& entry : lines) {
+                if (entry.layer != layer || entry.depthTested != depthTested)
+                    continue;
+                for (const Math::Vector3f& end : {entry.line.from, entry.line.to})
+                    vertices.insert(vertices.end(), {end.x, end.y, end.z, entry.line.color.r, entry.line.color.g, entry.line.color.b, entry.line.color.a});
+            }
+            if (vertices.empty())
+                continue;
+
+            if (depthTested)
+                Enable(DEPTH_TEST);
+            else
+                Disable(DEPTH_TEST);
+            UseProgram(line.id());
+            setMatrix(line.uniform("uViewProjection"), viewProjection);
+            BindVertexArray(lineVao);
+            BindBuffer(ARRAY_BUFFER, lineVbo);
+            BufferData(ARRAY_BUFFER, static_cast<GLsizeiptr>(vertices.size() * sizeof(float)), vertices.data(), STATIC_DRAW);
+            DrawArrays(LINES, 0, static_cast<GLsizei>(vertices.size() / 7));
+        }
+        BindVertexArray(0);
+        Enable(DEPTH_TEST);
+        DepthFunc(LESS);
+        Disable(BLEND);
+        Disable(FRAMEBUFFER_SRGB);
+    }
+
     void present()
     {
         if (!presentFramebuffer || !fbo)
@@ -994,7 +1062,11 @@ k3::Result<std::unique_ptr<k3::HardwareRasterizer>> k3::HardwareRasterizer::crea
     if (!overlay)
         return Error{"OpenGL: overlay shader: " + overlay.error()};
 
-    auto impl = std::make_unique<Impl>(std::move(*mesh), std::move(*shadow), std::move(*ssaa), std::move(*fxaa), std::move(*sky), std::move(*overlay));
+    auto line = gl::Program::create(gl::shaders::LINE_VERTEX, gl::shaders::LINE_FRAGMENT);
+    if (!line)
+        return Error{"OpenGL: line shader: " + line.error()};
+
+    auto impl = std::make_unique<Impl>(std::move(*mesh), std::move(*shadow), std::move(*ssaa), std::move(*fxaa), std::move(*sky), std::move(*overlay), std::move(*line));
     impl->driver = std::string(version) + " / " + (renderer ? renderer : "unknown");
     impl->resize(width, height);
     log(LogLevel::Info, "OpenGL rasterizer on {}", impl->driver);
@@ -1059,9 +1131,18 @@ void k3::HardwareRasterizer::beginFrame(const Camera& camera, const Environment&
     impl.environment = environment;
     impl.view = camera.view();
     impl.viewProjection = camera.projectionMatrix(aspect) * impl.view;
+    impl.layerCameras = {camera};
+    impl.layerStarts = {0};
     impl.commands.clear();
+    impl.lines.clear();
     impl.overlays.clear();
     impl.stats = {};
+}
+
+void k3::HardwareRasterizer::beginLayer(const Camera& camera)
+{
+    m_impl->layerCameras.push_back(camera);
+    m_impl->layerStarts.push_back(m_impl->commands.size());
 }
 
 void k3::HardwareRasterizer::draw(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material> material, const Math::Matrix4& transform)
@@ -1071,6 +1152,12 @@ void k3::HardwareRasterizer::draw(std::shared_ptr<const Mesh> mesh, std::shared_
     m_impl->stats.drawCalls++;
     m_impl->stats.triangles += mesh->triangleCount();
     m_impl->commands.push_back({std::move(mesh), std::move(material), transform});
+}
+
+void k3::HardwareRasterizer::drawLines(std::span<const DebugLine> lines, bool depthTested)
+{
+    for (const DebugLine& line : lines)
+        m_impl->lines.push_back({line, depthTested, m_impl->layerStarts.size() - 1});
 }
 
 void k3::HardwareRasterizer::draw2D(std::shared_ptr<Texture> texture, const Rect& destination, const Rect& source, const Math::Color& tint)
@@ -1085,34 +1172,53 @@ void k3::HardwareRasterizer::endFrame()
 
     if (!impl.fbo) {
         impl.commands.clear();
+        impl.lines.clear();
         impl.overlays.clear();
         return;
     }
 
-    const Frustum frustum(impl.viewProjection);
-
-    for (DrawCommand& command : impl.commands) {
-        command.gpu = &impl.meshFor(command.mesh);
-        command.bounds = command.gpu->bounds.transformed(command.transform);
-        command.visible = frustum.intersects(command.bounds);
-        impl.stats.culledDraws += !command.visible;
-    }
-
-    // Same ordering as the software backend: opaque in submission order, blended farthest first.
-    const auto isBlended = [](const DrawCommand& c) { return materialOf(c).alphaMode == AlphaMode::Blend; };
-    const auto firstBlended = std::stable_partition(impl.commands.begin(), impl.commands.end(), [&](const DrawCommand& c) { return !isBlended(c); });
-    for (auto it = firstBlended; it != impl.commands.end(); ++it)
-        it->viewDepth = -impl.view.transformPoint(it->bounds.center()).z;
-    std::stable_sort(firstBlended, impl.commands.end(), [](const DrawCommand& a, const DrawCommand& b) { return a.viewDepth > b.viewDepth; });
-    const auto blendedStart = static_cast<std::size_t>(firstBlended - impl.commands.begin());
-
-    const sw::ShadingContext lights = sw::ShadingContext::prepare(impl.camera, impl.environment);
+    // Each layer is drawn in turn into the same target. The first renders the shadow maps (from its own
+    // draws) and the sky; the others look through their own camera over a cleared depth buffer.
+    std::vector<DrawCommand> recorded = std::move(impl.commands);
     std::vector<ShadowCascade> cascades;
-    const int shadowLight = impl.renderShadows(lights, blendedStart, cascades);
+    int shadowLight = -1;
+    const float aspect = impl.height ? static_cast<float>(impl.width) / static_cast<float>(impl.height) : 1.f;
 
-    gl::UseProgram(impl.mesh.id());
-    impl.setFrameUniforms(lights, shadowLight, cascades);
-    impl.renderMain(blendedStart);
+    for (std::size_t layer = 0; layer < impl.layerStarts.size(); ++layer) {
+        const std::size_t first = impl.layerStarts[layer];
+        const std::size_t last = layer + 1 < impl.layerStarts.size() ? impl.layerStarts[layer + 1] : recorded.size();
+
+        impl.commands.assign(std::make_move_iterator(recorded.begin() + static_cast<std::ptrdiff_t>(first)), std::make_move_iterator(recorded.begin() + static_cast<std::ptrdiff_t>(last)));
+        impl.camera = impl.layerCameras[layer];
+        impl.view = impl.camera.view();
+        impl.viewProjection = impl.camera.projectionMatrix(aspect) * impl.view;
+
+        const Frustum frustum(impl.viewProjection);
+
+        for (DrawCommand& command : impl.commands) {
+            command.gpu = &impl.meshFor(command.mesh);
+            command.bounds = command.gpu->bounds.transformed(command.transform);
+            command.visible = frustum.intersects(command.bounds);
+            impl.stats.culledDraws += !command.visible;
+        }
+
+        // Same ordering as the software backend: opaque in submission order, blended farthest first.
+        const auto isBlended = [](const DrawCommand& c) { return materialOf(c).alphaMode == AlphaMode::Blend; };
+        const auto firstBlended = std::stable_partition(impl.commands.begin(), impl.commands.end(), [&](const DrawCommand& c) { return !isBlended(c); });
+        for (auto it = firstBlended; it != impl.commands.end(); ++it)
+            it->viewDepth = -impl.view.transformPoint(it->bounds.center()).z;
+        std::stable_sort(firstBlended, impl.commands.end(), [](const DrawCommand& a, const DrawCommand& b) { return a.viewDepth > b.viewDepth; });
+        const auto blendedStart = static_cast<std::size_t>(firstBlended - impl.commands.begin());
+
+        const sw::ShadingContext lights = sw::ShadingContext::prepare(impl.camera, impl.environment);
+
+        if (layer == 0)
+            shadowLight = impl.renderShadows(lights, blendedStart, cascades);
+        gl::UseProgram(impl.mesh.id());
+        impl.setFrameUniforms(lights, shadowLight, cascades);
+        impl.renderMain(blendedStart, layer == 0);
+        impl.drawDebugLines(layer);
+    }
     impl.antiAlias();
     impl.upscale();
     impl.drawOverlays();
@@ -1120,6 +1226,7 @@ void k3::HardwareRasterizer::endFrame()
     impl.restoreState();
 
     impl.commands.clear();
+    impl.lines.clear();
     impl.overlays.clear();
     impl.collectGarbage();
     impl.stats.frameMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
