@@ -8,6 +8,7 @@
 
 #include <kronk3d/math/Bounds.hpp>
 #include <kronk3d/math/Color.hpp>
+#include <kronk3d/render/Skybox.hpp>
 #include <kronk3d/scene/Light.hpp>
 #include <cstddef>
 #include <cstdint>
@@ -53,6 +54,7 @@ namespace k3
     {
         Math::Color        clearColor = {0.02f, 0.02f, 0.025f, 1.f};
         Fog                fog{};
+        Skybox             skybox{};                                  // When valid(), drawn instead of clearColor behind the geometry
         Math::Color        ambient    = {0.1f, 0.1f, 0.1f, 1.f};      // Multiplied by the surface albedo
         std::vector<Light> lights{};
         ShadowSettings     shadows{};
