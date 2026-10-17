@@ -152,6 +152,8 @@ hero.draw(*rasterizer, k3::Math::Matrix4::translate(position));  // Place the ch
 rasterizer->endFrame();
 ```
 
+`kronk3d_animation_demo [file.glb] [--software]` is a minimal program doing exactly this (keys `1`-`9` pick a clip).
+
 One `Animator` per character on screen; they can share the same `AnimatedModel`. `hero.model().animations`
 lists the clips. Calling `play` with the clip that is already playing does not restart it.
 
