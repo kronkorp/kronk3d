@@ -1,7 +1,7 @@
 #include "third_party/stb_image.h"
 #include "third_party/stb_image_write.h"
 
-#include "Image.hpp"
+#include <kronk3d/scene/Image.hpp>
 #include <algorithm>
 #include <cmath>
 #include <fstream>

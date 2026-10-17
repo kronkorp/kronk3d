@@ -1,6 +1,6 @@
 #include "Test.hpp"
 #include "render/ShadowFit.hpp"
-#include "render/software/SoftwareRasterizer.hpp"
+#include <kronk3d/render/software/SoftwareRasterizer.hpp>
 #include <cmath>
 
 namespace

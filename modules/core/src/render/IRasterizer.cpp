@@ -1,6 +1,6 @@
-#include "IRasterizer.hpp"
-#include "render/opengl/HardwareRasterizer.hpp"
-#include "render/software/SoftwareRasterizer.hpp"
+#include <kronk3d/render/IRasterizer.hpp>
+#include <kronk3d/render/opengl/HardwareRasterizer.hpp>
+#include <kronk3d/render/software/SoftwareRasterizer.hpp>
 
 void k3::IRasterizer::draw(const Model& model, const Math::Matrix4& transform)
 {

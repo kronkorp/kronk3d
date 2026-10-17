@@ -1,5 +1,5 @@
 #include "Test.hpp"
-#include "render/software/SoftwareRasterizer.hpp"
+#include <kronk3d/render/software/SoftwareRasterizer.hpp>
 #include <set>
 
 namespace

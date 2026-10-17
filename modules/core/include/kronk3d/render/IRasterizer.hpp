@@ -6,14 +6,14 @@
 */
 #pragma once
 
-#include "Matrix.hpp"
-#include "render/Environment.hpp"
-#include "scene/Camera.hpp"
-#include "scene/Image.hpp"
-#include "scene/Material.hpp"
-#include "scene/Mesh.hpp"
-#include "scene/Model.hpp"
-#include "utils/Result.hpp"
+#include <kronk3d/math/Matrix.hpp>
+#include <kronk3d/render/Environment.hpp>
+#include <kronk3d/scene/Camera.hpp>
+#include <kronk3d/scene/Image.hpp>
+#include <kronk3d/scene/Material.hpp>
+#include <kronk3d/scene/Mesh.hpp>
+#include <kronk3d/scene/Model.hpp>
+#include <kronk3d/utils/Result.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <functional>

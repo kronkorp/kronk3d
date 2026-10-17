@@ -1,4 +1,4 @@
-#include "Animation.hpp"
+#include <kronk3d/scene/Animation.hpp>
 #include <algorithm>
 #include <cmath>
 

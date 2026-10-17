@@ -1,4 +1,4 @@
-#include "SoftwareRasterizer.hpp"
+#include <kronk3d/render/software/SoftwareRasterizer.hpp>
 #include "Clipper.hpp"
 #include "Pipeline.hpp"
 #include "PostProcess.hpp"

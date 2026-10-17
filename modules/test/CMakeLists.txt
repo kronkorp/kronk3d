@@ -12,6 +12,8 @@ apply_project_settings(kronk3d_tests)
 
 ###
 
+# White-box tests: they also see the private headers of the core.
+target_include_directories(kronk3d_tests PRIVATE ${CMAKE_SOURCE_DIR}/modules/core/src)
 target_link_libraries(kronk3d_tests PRIVATE kronk3d_static)
 
 add_test(NAME kronk3d_tests COMMAND kronk3d_tests)
@@ -25,7 +27,7 @@ if (K3_BUILD_GL_TESTS)
 
     add_executable(kronk3d_gl_tests ${GL_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/src/Main.cpp)
     apply_project_settings(kronk3d_gl_tests)
-    target_include_directories(kronk3d_gl_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/)
+    target_include_directories(kronk3d_gl_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/ ${CMAKE_SOURCE_DIR}/modules/core/src)
     target_link_libraries(kronk3d_gl_tests PRIVATE kronk3d_static sfml-window sfml-system)
 
     add_test(NAME kronk3d_gl_tests COMMAND kronk3d_gl_tests)

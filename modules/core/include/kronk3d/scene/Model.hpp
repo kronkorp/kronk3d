@@ -6,9 +6,9 @@
 */
 #pragma once
 
-#include "Bounds.hpp"
-#include "Material.hpp"
-#include "Mesh.hpp"
+#include <kronk3d/math/Bounds.hpp>
+#include <kronk3d/scene/Material.hpp>
+#include <kronk3d/scene/Mesh.hpp>
 #include <memory>
 #include <string>
 #include <vector>

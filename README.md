@@ -86,7 +86,7 @@ k3::setLogLevel(k3::LogLevel::Warning);   // Drop Info messages
 ## Quick start
 
 ```cpp
-#include "Kronk3d.hpp"
+#include <kronk3d/Kronk3d.hpp>
 
 // Assets
 auto model = k3::ObjLoader::load("assets/spot/spot.obj");     // k3::Result<k3::Model>
@@ -199,16 +199,20 @@ casters (`ShadowSettings::cascades`, `resolution`).
 
 ```
 modules/
-  math/    Vectors, matrices, bounds, colors (header-only)
-  logger/  Logger
-  core/src/
-    scene/     Image, Texture, Mesh, Material, Model, Camera, Light, Animation, Animator
-    io/        ObjLoader, GltfLoader
-    render/    IRasterizer, Environment, ShadowFit
-      software/  SoftwareRasterizer: pipeline, clipper, sampling, shading, thread pool
-      opengl/    HardwareRasterizer, ImagePresenter, GL loader, shaders
+  math/include/kronk3d/math/   Vectors, matrices, bounds, colors (public, header-only)
+  logger/  Logger (internal)
+  core/
+    include/kronk3d/    Public API, installed as <kronk3d/...>. <kronk3d/Kronk3d.hpp> includes it all
+      scene/     Image, Texture, Mesh, Material, Model, Camera, Light, Animation, Animator
+      io/        ObjLoader, GltfLoader
+      render/    IRasterizer, Environment; software/SoftwareRasterizer; opengl/HardwareRasterizer, ImagePresenter
+      utils/     Result
+    src/                Sources and private headers (never installed)
+      render/    ShadowFit
+        software/  Pipeline, clipper, sampling, shading, post-process, thread pool
+        opengl/    GL loader, Program, shaders
   test/
-    src/      CPU unit tests
+    src/      CPU unit tests (they also see the private headers)
     gl/       OpenGL tests (including a pixel comparison with the software backend)
     package/  Consumer of the installed CMake package (CI)
 example/      Interactive demo (SFML window)

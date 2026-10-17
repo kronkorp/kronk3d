@@ -1,5 +1,5 @@
-#include "Animator.hpp"
-#include "render/IRasterizer.hpp"
+#include <kronk3d/scene/Animator.hpp>
+#include <kronk3d/render/IRasterizer.hpp>
 #include <algorithm>
 #include <cmath>
 #include <utility>

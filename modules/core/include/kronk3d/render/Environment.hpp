@@ -6,9 +6,9 @@
 */
 #pragma once
 
-#include "Bounds.hpp"
-#include "Color.hpp"
-#include "scene/Light.hpp"
+#include <kronk3d/math/Bounds.hpp>
+#include <kronk3d/math/Color.hpp>
+#include <kronk3d/scene/Light.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <vector>

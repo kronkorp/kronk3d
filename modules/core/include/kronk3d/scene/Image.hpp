@@ -6,8 +6,8 @@
 */
 #pragma once
 
-#include "Color.hpp"
-#include "utils/Result.hpp"
+#include <kronk3d/math/Color.hpp>
+#include <kronk3d/utils/Result.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>

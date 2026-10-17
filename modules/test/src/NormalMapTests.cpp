@@ -1,8 +1,8 @@
 #include "Test.hpp"
-#include "io/ObjLoader.hpp"
-#include "render/software/SoftwareRasterizer.hpp"
-#include "scene/Mesh.hpp"
-#include "scene/Texture.hpp"
+#include <kronk3d/io/ObjLoader.hpp>
+#include <kronk3d/render/software/SoftwareRasterizer.hpp>
+#include <kronk3d/scene/Mesh.hpp>
+#include <kronk3d/scene/Texture.hpp>
 #include <cmath>
 #include <map>
 #include <sstream>

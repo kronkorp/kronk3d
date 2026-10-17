@@ -7,7 +7,7 @@
 #pragma once
 
 #include "GL.hpp"
-#include "utils/Result.hpp"
+#include <kronk3d/utils/Result.hpp>
 #include <utility>
 
 namespace k3::gl

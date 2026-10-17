@@ -1,6 +1,6 @@
 #include "CubeTextured.hpp"
-#include "Vector.hpp"
-#include "scene/Texture.hpp"
+#include <kronk3d/math/Vector.hpp>
+#include <kronk3d/scene/Texture.hpp>
 #include <cstdint>
 #include <memory>
 #include <iterator>

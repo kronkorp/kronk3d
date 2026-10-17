@@ -1,7 +1,7 @@
 #include "Test.hpp"
-#include "io/GltfLoader.hpp"
-#include "render/IRasterizer.hpp"
-#include "scene/Animator.hpp"
+#include <kronk3d/io/GltfLoader.hpp>
+#include <kronk3d/render/IRasterizer.hpp>
+#include <kronk3d/scene/Animator.hpp>
 #include <cmath>
 #include <cstring>
 #include <format>

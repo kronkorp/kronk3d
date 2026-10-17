@@ -1,4 +1,4 @@
-#include "HardwareRasterizer.hpp"
+#include <kronk3d/render/opengl/HardwareRasterizer.hpp>
 #include "GL.hpp"
 #include "utils/Log.hpp"
 #include "Program.hpp"

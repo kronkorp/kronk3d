@@ -6,11 +6,11 @@
 */
 #pragma once
 
-#include "Bounds.hpp"
-#include "Matrix.hpp"
-#include "Vector.hpp"
-#include "render/Environment.hpp"
-#include "scene/Camera.hpp"
+#include <kronk3d/math/Bounds.hpp>
+#include <kronk3d/math/Matrix.hpp>
+#include <kronk3d/math/Vector.hpp>
+#include <kronk3d/render/Environment.hpp>
+#include <kronk3d/scene/Camera.hpp>
 #include <cstddef>
 #include <vector>
 

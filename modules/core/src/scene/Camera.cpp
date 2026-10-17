@@ -1,4 +1,4 @@
-#include "Camera.hpp"
+#include <kronk3d/scene/Camera.hpp>
 #include <algorithm>
 #include <cmath>
 

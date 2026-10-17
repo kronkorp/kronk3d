@@ -1,5 +1,5 @@
 #include "Test.hpp"
-#include "Kronk3d.hpp"
+#include <kronk3d/Kronk3d.hpp>
 #include "render/opengl/GL.hpp"
 #include <SFML/Window/Context.hpp>
 #include <cmath>

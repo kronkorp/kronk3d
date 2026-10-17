@@ -13,7 +13,11 @@ find_package(Threads REQUIRED)
 add_library(kronk3d_objects OBJECT ${SOURCES})
 apply_project_settings(kronk3d_objects)
 set_target_properties(kronk3d_objects PROPERTIES POSITION_INDEPENDENT_CODE ON)
-target_include_directories(kronk3d_objects PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/>)
+# include/ is the public API (<kronk3d/...>); src/ holds the private headers and the sources.
+target_include_directories(kronk3d_objects
+    PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/>
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/
+)
 target_link_libraries(kronk3d_objects PUBLIC kronk3d_math Threads::Threads PRIVATE kronk3d_logger)
 
 add_library(kronk3d_shared SHARED $<TARGET_OBJECTS:kronk3d_objects>)
@@ -22,8 +26,8 @@ add_library(kronk3d_static STATIC $<TARGET_OBJECTS:kronk3d_objects>)
 foreach(target kronk3d_shared kronk3d_static)
     apply_project_settings(${target})
     target_include_directories(${target} PUBLIC
-        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/src/>
-        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/kronk3d>
+        $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/>
+        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>
     )
     target_link_libraries(${target} PUBLIC kronk3d_math Threads::Threads PRIVATE kronk3d_logger)
     set_target_properties(${target} PROPERTIES OUTPUT_NAME kronk3d)

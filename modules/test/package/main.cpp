@@ -1,5 +1,5 @@
 // Renders a red triangle with the installed library and checks a pixel.
-#include "Kronk3d.hpp"
+#include <kronk3d/Kronk3d.hpp>
 #include <iostream>
 #include <memory>
 

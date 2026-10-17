@@ -6,8 +6,8 @@
 */
 #pragma once
 
-#include "Color.hpp"
-#include "Vector.hpp"
+#include <kronk3d/math/Color.hpp>
+#include <kronk3d/math/Vector.hpp>
 
 namespace k3
 {

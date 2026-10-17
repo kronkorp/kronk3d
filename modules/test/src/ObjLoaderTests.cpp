@@ -1,5 +1,5 @@
 #include "Test.hpp"
-#include "io/ObjLoader.hpp"
+#include <kronk3d/io/ObjLoader.hpp>
 #include <map>
 #include <sstream>
 #include <string>

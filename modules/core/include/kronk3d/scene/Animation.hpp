@@ -6,11 +6,11 @@
 */
 #pragma once
 
-#include "Bounds.hpp"
-#include "Material.hpp"
-#include "Matrix.hpp"
-#include "Mesh.hpp"
-#include "Vector.hpp"
+#include <kronk3d/math/Bounds.hpp>
+#include <kronk3d/scene/Material.hpp>
+#include <kronk3d/math/Matrix.hpp>
+#include <kronk3d/scene/Mesh.hpp>
+#include <kronk3d/math/Vector.hpp>
 #include <memory>
 #include <string>
 #include <string_view>

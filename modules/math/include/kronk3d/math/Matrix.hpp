@@ -6,7 +6,7 @@
 */
 #pragma once
 
-#include "Vector.hpp"
+#include <kronk3d/math/Vector.hpp>
 #include <cmath>
 
 namespace k3::Math

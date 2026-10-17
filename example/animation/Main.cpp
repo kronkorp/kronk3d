@@ -2,7 +2,7 @@
 //     kronk3d_animation_demo [file.glb] [--software]
 // 1-9: play that clip (crossfaded) | Space: pause the spin | Escape: quit
 #include <SFML/Window.hpp>
-#include "Kronk3d.hpp"
+#include <kronk3d/Kronk3d.hpp>
 #include <chrono>
 #include <cmath>
 #include <iostream>

@@ -1,5 +1,5 @@
 #include "Cube.hpp"
-#include "Vector.hpp"
+#include <kronk3d/math/Vector.hpp>
 #include <cstdint>
 #include <iterator>
 #include <vector>

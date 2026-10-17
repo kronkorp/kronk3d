@@ -1,4 +1,4 @@
-#include "Mesh.hpp"
+#include <kronk3d/scene/Mesh.hpp>
 #include <cmath>
 
 bool k3::Mesh::valid() const noexcept
