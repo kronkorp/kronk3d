@@ -297,7 +297,6 @@ K3_TEST(gl_mesh_edits_are_uploaded)
 }
 
 K3_TEST(gl_overlay_matches_the_software_backend)
-K3_TEST(gl_skips_draws_outside_the_view)
 {
     if (!openGLAvailable())
         return;
@@ -342,6 +341,13 @@ K3_TEST(gl_skips_draws_outside_the_view)
         std::cout << "    anti-aliasing " << static_cast<int>(mode) << ": worst channel difference " << worst << std::endl;
         K3_CHECK(worst <= 2);       // Only the sRGB rounding of the blend may differ
     }
+}
+
+K3_TEST(gl_skips_draws_outside_the_view)
+{
+    if (!openGLAvailable())
+        return;
+
     auto gpu = hardware(4, 4);
     K3_REQUIRE(gpu);
 
