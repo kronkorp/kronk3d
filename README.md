@@ -12,7 +12,7 @@ Both backends produce the same image: the shading code is mirrored, and tests co
 - **Rendering API**
   - A frame is `beginFrame(camera, environment)`, any number of `draw(...)` calls, then `endFrame()`.
   - Backends are created at runtime with `createRasterizer(Backend::Software | Backend::OpenGL)`.
-  - Draws outside the camera frustum are skipped by the main pass (`FrameStats::culledDraws`); they still cast shadows.
+  - **2D overlay** for a HUD or menus, identical on both backends: `drawRect` and `drawImage` (sprite sheets, tint, flipping), in output pixels, drawn over the 3D frame after anti-aliasing.  - Draws outside the camera frustum are skipped by the main pass (`FrameStats::culledDraws`); they still cast shadows.
 - **Assets**
   - Wavefront **OBJ + MTL** loading: polygons with any number of sides, negative indices, vertex colors.
   - Normals are generated when the file has none (smooth, or flat with `s off`).
@@ -157,6 +157,19 @@ rasterizer->endFrame();
 
 One `Animator` per character on screen; they can share the same `AnimatedModel`. `hero.model().animations`
 lists the clips. Calling `play` with the clip that is already playing does not restart it.
+
+### 2D overlay
+
+```cpp
+rasterizer->beginFrame(camera, environment);
+rasterizer->draw(level, transform);
+rasterizer->drawRect({w / 2 - 1.f, h / 2 - 8.f, 2.f, 16.f}, k3::Math::Color::White);        // Crosshair
+rasterizer->drawImage(atlas, {10.f, h - 74.f, 64.f, 64.f}, {64.f, 0.f, 64.f, 64.f});        // Part of a sprite sheet
+rasterizer->endFrame();
+```
+
+Rectangles are in output pixels (origin top-left, y down), blended in linear space in submission order.
+Textures use their own sampler (`Nearest` for pixel art) and keep their alpha.
 
 ## Example
 

@@ -6,6 +6,7 @@
 */
 #pragma once
 
+#include <kronk3d/math/Color.hpp>
 #include <kronk3d/math/Matrix.hpp>
 #include <kronk3d/render/Environment.hpp>
 #include <kronk3d/scene/Camera.hpp>
@@ -33,6 +34,12 @@ namespace k3
         None,
         FXAA,       // Post-process edge smoothing on the final image: cheap, slightly blurry
         SSAA        // 2x2 supersampling: renders 4x the pixels and averages them (in linear space): exact, costly
+    };
+
+    // A rectangle of the output image, in pixels: origin at the top-left, y down.
+    struct Rect
+    {
+        float x = 0.f, y = 0.f, width = 0.f, height = 0.f;
     };
 
     struct FrameStats
@@ -88,6 +95,20 @@ namespace k3
 
             // Draws every primitive of the model with the same transform.
             void draw(const Model& model, const Math::Matrix4& transform = Math::Matrix4::identity());
+
+            // 2D overlay (HUD, menus): recorded like draw(), then rendered by endFrame() over the finished 3D
+            // frame, after anti-aliasing so it stays sharp, in submission order. It is alpha-blended in linear
+            // space and works the same on every backend. Positions are in output pixels, whatever the
+            // anti-aliasing mode.
+            //
+            // `source` is the part of the texture to show, in texels of its first level; an empty one means all
+            // of it (a negative width or height flips the image). `tint` multiplies the texels, and the whole
+            // rectangle is filled with it when there is no texture. Textures are sampled with their own
+            // Sampler (nearest for pixel art) and, like on meshes, their mipmaps when shown smaller.
+            virtual void draw2D(std::shared_ptr<Texture> texture, const Rect& destination, const Rect& source, const Math::Color& tint) = 0;
+
+            void drawRect(const Rect& destination, const Math::Color& color);
+            void drawImage(std::shared_ptr<Texture> texture, const Rect& destination, const Rect& source = {}, const Math::Color& tint = Math::Color::White);
 
             virtual void endFrame() = 0;
 

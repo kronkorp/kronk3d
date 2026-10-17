@@ -2,6 +2,7 @@
 #include "Clipper.hpp"
 #include "Pipeline.hpp"
 #include "PostProcess.hpp"
+#include "Sampling.hpp"
 #include "Shading.hpp"
 #include "ThreadPool.hpp"
 #include "render/Frustum.hpp"
@@ -32,6 +33,13 @@ namespace
         k3::Math::Bounds3f                  bounds{};           // World space, computed in endFrame()
         float                               viewDepth = 0.f;    // Blended draws are sorted on it
         bool                                visible = true;     // In the camera frustum: shadow passes ignore it
+    };
+
+    struct Overlay
+    {
+        std::shared_ptr<k3::Texture> texture;
+        k3::Rect                     destination, source;
+        k3::Math::Color              tint;
     };
 
     const k3::Material& defaultMaterial()
@@ -231,6 +239,7 @@ struct k3::SoftwareRasterizer::Impl
 
     // Frame data, indexed by draw (position in `commands` once sorted).
     std::vector<DrawCommand>    commands;
+    std::vector<Overlay>        overlays;
     std::vector<sw::DrawState>  drawStates;
     std::vector<DrawTransforms> transforms;
 
@@ -277,6 +286,54 @@ struct k3::SoftwareRasterizer::Impl
             sw::downsample2x2(color, outputWidth, outputHeight, output, pool);
         else if (antiAliasing == AntiAliasing::FXAA)
             sw::fxaa(color, outputWidth, outputHeight, output, pool);
+    }
+
+    /* 2D overlay: alpha-blended over the finished frame, in submission order */
+
+    void drawOverlays()
+    {
+        std::vector<Math::Color>& frame = antiAliasing == AntiAliasing::None ? color : output;
+        const auto width = static_cast<int>(outputWidth), height = static_cast<int>(outputHeight);
+
+        for (const Overlay& overlay : overlays) {
+            const Rect& to = overlay.destination;
+            const Texture* texture = overlay.texture && !overlay.texture->image().empty() ? overlay.texture.get() : nullptr;
+
+            if (!(to.width > 0.f && to.height > 0.f))
+                continue;
+
+            Rect from = overlay.source;
+            if (texture && (from.width == 0.f || from.height == 0.f))
+                from = {0.f, 0.f, static_cast<float>(texture->width()), static_cast<float>(texture->height())};
+            const float textureWidth = texture ? static_cast<float>(texture->width()) : 1.f;
+            const float textureHeight = texture ? static_cast<float>(texture->height()) : 1.f;
+            const Math::Vector2f duvdx{from.width / (to.width * textureWidth), 0.f};
+            const Math::Vector2f duvdy{0.f, from.height / (to.height * textureHeight)};
+
+            // The pixels whose centre is inside the rectangle.
+            const int x0 = std::max(0, static_cast<int>(std::ceil(to.x - 0.5f))), x1 = std::min(width, static_cast<int>(std::ceil(to.x + to.width - 0.5f)));
+            const int y0 = std::max(0, static_cast<int>(std::ceil(to.y - 0.5f))), y1 = std::min(height, static_cast<int>(std::ceil(to.y + to.height - 0.5f)));
+
+            if (x0 >= x1 || y0 >= y1)
+                continue;
+            pool.parallelFor(static_cast<std::size_t>(y1 - y0), [&](std::size_t row) {
+                const int y = y0 + static_cast<int>(row);
+                const float v = (from.y + (static_cast<float>(y) + 0.5f - to.y) / to.height * from.height) / textureHeight;
+
+                for (int x = x0; x < x1; ++x) {
+                    const float u = (from.x + (static_cast<float>(x) + 0.5f - to.x) / to.width * from.width) / textureWidth;
+                    const Math::Color source = sw::sampleTexture(texture, {u, v}, duvdx, duvdy) * overlay.tint;
+                    Math::Color& target = frame[static_cast<std::size_t>(y) * outputWidth + static_cast<std::size_t>(x)];
+
+                    target = {
+                        source.r * source.a + target.r * (1.f - source.a),
+                        source.g * source.a + target.g * (1.f - source.a),
+                        source.b * source.a + target.b * (1.f - source.a),
+                        source.a + target.a * (1.f - source.a),
+                    };
+                }
+            });
+        }
     }
 
     /* Frame planning (sequential) */
@@ -877,6 +934,7 @@ void k3::SoftwareRasterizer::beginFrame(const Camera& camera, const Environment&
     impl.mainPass.viewProjection = camera.projectionMatrix(aspect) * impl.view;
     impl.shading = sw::ShadingContext::prepare(camera, environment);
     impl.commands.clear();
+    impl.overlays.clear();
     impl.stats = {};
 }
 
@@ -887,6 +945,11 @@ void k3::SoftwareRasterizer::draw(std::shared_ptr<const Mesh> mesh, std::shared_
     m_impl->stats.drawCalls++;
     m_impl->stats.triangles += mesh->triangleCount();
     m_impl->commands.push_back({std::move(mesh), std::move(material), transform});
+}
+
+void k3::SoftwareRasterizer::draw2D(std::shared_ptr<Texture> texture, const Rect& destination, const Rect& source, const Math::Color& tint)
+{
+    m_impl->overlays.push_back({std::move(texture), destination, source, tint});
 }
 
 void k3::SoftwareRasterizer::endFrame()
@@ -910,10 +973,12 @@ void k3::SoftwareRasterizer::endFrame()
     impl.runGeometry(impl.mainPass);
     impl.pool.parallelFor(impl.mainPass.tileCount(), [&](std::size_t tile) { impl.renderTile(tile); });
     impl.antiAlias();
+    impl.drawOverlays();
 
     // Draw states point into the recorded materials: drop both together.
     impl.drawStates.clear();
     impl.commands.clear();
+    impl.overlays.clear();
     impl.shading.shadow = sw::ShadowMap{};
     impl.collectBounds();
     impl.stats.frameMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
