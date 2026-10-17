@@ -12,6 +12,7 @@ Both backends produce the same image: the shading code is mirrored, and tests co
 - **Rendering API**
   - A frame is `beginFrame(camera, environment)`, any number of `draw(...)` calls, then `endFrame()`.
   - Backends are created at runtime with `createRasterizer(Backend::Software | Backend::OpenGL)`.
+  - **Billboards** (`BillboardBatch`): camera-facing quads (particles, sparks, smoke) with a position, size, color, rotation and sprite-sheet cell each, sorted and drawn in one call; the arena's torch embers are one.
   - **Render scale** (`setRenderScale`, `RasterizerConfig::renderScale`): the scene renders at a fraction of the output size and is enlarged with no filtering, for a low-resolution look or to save fill rate; the 2D overlay stays sharp.
   - **Layers** (`beginLayer(camera)`): what follows is drawn over the scene with its own camera and a cleared depth buffer, for a first-person weapon with its own field of view that never goes through walls. It shares the lights, the fog and the shadows it receives (it casts none).
   - **Debug lines** (`drawLine`, `drawBounds`): world-space segments and boxes, depth-tested or always visible, per layer.

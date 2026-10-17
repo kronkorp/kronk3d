@@ -13,6 +13,7 @@
 
 #include <kronk3d/scene/Animation.hpp>
 #include <kronk3d/scene/Animator.hpp>
+#include <kronk3d/scene/BillboardBatch.hpp>
 #include <kronk3d/scene/Camera.hpp>
 #include <kronk3d/scene/Image.hpp>
 #include <kronk3d/scene/Light.hpp>
