@@ -6,7 +6,7 @@
 */
 #pragma once
 
-#include "Image.hpp"
+#include <kronk3d/scene/Image.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>

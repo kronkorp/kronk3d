@@ -6,7 +6,7 @@
 // The camera stands inside the scene's bounds, near the floor, looking along its longest horizontal axis
 // (a good default for architectural scenes such as Sponza).
 #include <SFML/Window/Context.hpp>
-#include "Kronk3d.hpp"
+#include <kronk3d/Kronk3d.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cstdio>

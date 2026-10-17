@@ -6,7 +6,7 @@
 */
 #pragma once
 
-#include "Color.hpp"
+#include <kronk3d/math/Color.hpp>
 #include "ThreadPool.hpp"
 #include <cstdint>
 #include <vector>

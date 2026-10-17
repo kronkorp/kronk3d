@@ -6,8 +6,8 @@
 */
 #pragma once
 
-#include "Animation.hpp"
-#include "Matrix.hpp"
+#include <kronk3d/scene/Animation.hpp>
+#include <kronk3d/math/Matrix.hpp>
 #include <memory>
 #include <string_view>
 #include <vector>

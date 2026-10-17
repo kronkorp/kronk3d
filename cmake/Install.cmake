@@ -1,5 +1,5 @@
-# `cmake --install build --prefix <dir>` installs the libraries, the headers (folder layout kept:
-# they include each other as "scene/Mesh.hpp"...) and a CMake package, so that other projects can do
+# `cmake --install build --prefix <dir>` installs the libraries, the public headers (include/kronk3d/...,
+# used as <kronk3d/scene/Mesh.hpp>) and a CMake package, so that other projects can do
 #     find_package(kronk3d 0.1 REQUIRED)
 #     target_link_libraries(app PRIVATE kronk3d::static)   # or kronk3d::shared
 include(CMakePackageConfigHelpers)
@@ -12,9 +12,8 @@ install(TARGETS kronk3d_shared kronk3d_static kronk3d_math kronk3d_logger KRONK3
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
-install(DIRECTORY ${PROJECT_SOURCE_DIR}/modules/core/src/ ${PROJECT_SOURCE_DIR}/modules/math/src/
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/kronk3d
-    FILES_MATCHING PATTERN "*.hpp" PATTERN "*.h"
+install(DIRECTORY ${PROJECT_SOURCE_DIR}/modules/core/include/ ${PROJECT_SOURCE_DIR}/modules/math/include/
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 install(EXPORT kronk3dTargets NAMESPACE kronk3d:: DESTINATION ${K3_CMAKE_DIR})
 

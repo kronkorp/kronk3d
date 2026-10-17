@@ -1,6 +1,6 @@
 #include "Test.hpp"
-#include "scene/Image.hpp"
-#include "scene/Mesh.hpp"
+#include <kronk3d/scene/Image.hpp>
+#include <kronk3d/scene/Mesh.hpp>
 
 K3_TEST(mesh_compute_normals_on_ccw_quad_points_to_plus_z)
 {

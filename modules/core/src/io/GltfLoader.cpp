@@ -1,4 +1,4 @@
-#include "GltfLoader.hpp"
+#include <kronk3d/io/GltfLoader.hpp>
 #include "third_party/cgltf.h"
 #include "utils/Log.hpp"
 #include <algorithm>

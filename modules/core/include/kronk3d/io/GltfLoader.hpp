@@ -6,8 +6,8 @@
 */
 #pragma once
 
-#include "scene/Animation.hpp"
-#include "utils/Result.hpp"
+#include <kronk3d/scene/Animation.hpp>
+#include <kronk3d/utils/Result.hpp>
 #include <cstddef>
 #include <filesystem>
 

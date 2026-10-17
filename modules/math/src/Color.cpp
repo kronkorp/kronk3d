@@ -1,4 +1,4 @@
-#include "Color.hpp"
+#include <kronk3d/math/Color.hpp>
 
 namespace k3::Math
 {

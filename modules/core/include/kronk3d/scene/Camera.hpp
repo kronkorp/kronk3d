@@ -6,8 +6,8 @@
 */
 #pragma once
 
-#include "Matrix.hpp"
-#include "Vector.hpp"
+#include <kronk3d/math/Matrix.hpp>
+#include <kronk3d/math/Vector.hpp>
 #include <numbers>
 
 namespace k3

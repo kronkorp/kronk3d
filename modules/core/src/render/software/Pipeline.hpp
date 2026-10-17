@@ -6,8 +6,8 @@
 */
 #pragma once
 
-#include "Vector.hpp"
-#include "scene/Material.hpp"
+#include <kronk3d/math/Vector.hpp>
+#include <kronk3d/scene/Material.hpp>
 #include <cstddef>
 #include <cstdint>
 

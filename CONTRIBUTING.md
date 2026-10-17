@@ -20,6 +20,10 @@ SFML is only needed by the example, the OpenGL tests and the benchmark (`-DK3_BU
 
 New behavior comes with a test: `modules/test/src` for the CPU side, `modules/test/gl` for what only an OpenGL context can check.
 
+## Code layout
+
+Public headers live in `modules/core/include/kronk3d/` (and `modules/math/include/kronk3d/math/`) and are included as `<kronk3d/scene/Mesh.hpp>`. Everything else (`modules/core/src/`) is private: examples and tools must not need it. A public header must only include public headers.
+
 ## Style
 
 `.editorconfig` and `.clang-format` describe the style (4 spaces, Allman braces for types, functions and namespaces, namespace contents indented).

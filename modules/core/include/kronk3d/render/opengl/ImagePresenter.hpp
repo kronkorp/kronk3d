@@ -6,9 +6,9 @@
 */
 #pragma once
 
-#include "render/IRasterizer.hpp"
-#include "scene/Image.hpp"
-#include "utils/Result.hpp"
+#include <kronk3d/render/IRasterizer.hpp>
+#include <kronk3d/scene/Image.hpp>
+#include <kronk3d/utils/Result.hpp>
 #include <cstdint>
 #include <memory>
 

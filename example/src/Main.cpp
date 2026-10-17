@@ -1,5 +1,5 @@
 #include <SFML/Window.hpp>
-#include "Kronk3d.hpp"
+#include <kronk3d/Kronk3d.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cstdlib>

@@ -1,8 +1,8 @@
 #include "Transparency.hpp"
-#include "Matrix.hpp"
+#include <kronk3d/math/Matrix.hpp>
 #include "cube/Cube.hpp"
-#include "scene/Image.hpp"
-#include "scene/Texture.hpp"
+#include <kronk3d/scene/Image.hpp>
+#include <kronk3d/scene/Texture.hpp>
 #include <cstdint>
 #include <memory>
 

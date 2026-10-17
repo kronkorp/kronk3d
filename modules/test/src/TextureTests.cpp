@@ -1,7 +1,7 @@
 #include "Test.hpp"
 #include "render/software/Sampling.hpp"
-#include "render/software/SoftwareRasterizer.hpp"
-#include "scene/Texture.hpp"
+#include <kronk3d/render/software/SoftwareRasterizer.hpp>
+#include <kronk3d/scene/Texture.hpp>
 
 namespace
 {

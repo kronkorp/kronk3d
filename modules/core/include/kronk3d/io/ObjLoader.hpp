@@ -6,9 +6,9 @@
 */
 #pragma once
 
-#include "scene/Model.hpp"
-#include "scene/Texture.hpp"
-#include "utils/Result.hpp"
+#include <kronk3d/scene/Model.hpp>
+#include <kronk3d/scene/Texture.hpp>
+#include <kronk3d/utils/Result.hpp>
 #include <filesystem>
 #include <functional>
 #include <istream>

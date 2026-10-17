@@ -6,8 +6,8 @@
 */
 #pragma once
 
-#include "Color.hpp"
-#include "Texture.hpp"
+#include <kronk3d/math/Color.hpp>
+#include <kronk3d/scene/Texture.hpp>
 #include <memory>
 #include <string>
 
