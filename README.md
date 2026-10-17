@@ -194,10 +194,7 @@ Textures use their own sampler (`Nearest` for pixel art) and keep their alpha.
 
 ### Arena
 
-`kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--bounds] [--screenshot file.png [--seconds S]]`
-`kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--scale 0.05-1] [--screenshot file.png [--seconds S]]`
-`kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--flat] [--screenshot file.png [--seconds S]]`
-`kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--tone none|reinhard|aces] [--screenshot file.png [--seconds S]]`
+`kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--scale 0.05-1] [--tone none|reinhard|aces] [--flat] [--bounds] [--first-person] [--screenshot file.png [--seconds S]]`
 
 A third-person showcase: you drive the robot of the Godot 3D platformer demo (`example/assets/robot`,
 MIT) around a stone arena with walls, stairs, 170 crates, torch pillars and a glass panel. It uses the
@@ -209,6 +206,7 @@ overlay (counters drawn with a pixel font, and a minimap).
 |---|---|
 | `ZQSD` / `WASD`, `Shift`, `Space` | Move relative to the camera, run, jump |
 | Mouse, arrow keys | Camera |
+| `C` | First person: the weapon is drawn on a layer of its own (own field of view, never through a wall), with a crosshair |
 | `T` | Day, sunset, night |
 | `F` | Fog on / off |
 | `V` | Anti-aliasing: none, FXAA, SSAA |

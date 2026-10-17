@@ -27,6 +27,9 @@ class Level
 
         void draw(k3::IRasterizer& rasterizer) const;
 
+        // A box mesh with texture coordinates in world units (`tile` units per repeat).
+        [[nodiscard]] static std::shared_ptr<k3::Mesh> boxMesh(const k3::Math::Vector3f& min, const k3::Math::Vector3f& max, float tile);
+
         [[nodiscard]] const std::vector<Box>& solids() const noexcept { return m_solids; }
         [[nodiscard]] const std::vector<k3::Light>& torches() const noexcept { return m_torches; }
 

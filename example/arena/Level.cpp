@@ -192,6 +192,11 @@ Level::Level(const std::filesystem::path& assets)
     }
 }
 
+std::shared_ptr<k3::Mesh> Level::boxMesh(const k3::Math::Vector3f& min, const k3::Math::Vector3f& max, float tile)
+{
+    return makeBox(min, max, tile);
+}
+
 void Level::addSolid(const Box& box, const std::shared_ptr<k3::Material>& material, float tile)
 {
     m_props.push_back({makeBox(box.min, box.max, tile), material});
