@@ -71,6 +71,8 @@ uniform vec3  uCameraPosition;
 uniform vec3  uViewDirection;
 uniform bool  uOrthographic;
 uniform vec3  uAmbient;
+uniform vec4  uFogColor;    // rgb, and a = 1 when the fog is on
+uniform vec4  uFog;         // x: density at the camera's altitude, y: height falloff
 uniform int   uLightCount;
 uniform int   uLightType[MAX_LIGHTS];
 uniform vec3  uLightPosition[MAX_LIGHTS];
@@ -145,6 +147,19 @@ float shadowVisibility(vec3 position, vec3 normal)
     return float(lit) / float(taps);
 }
 
+// Mirrors sw::fogVisibility (render/software/Shading.cpp).
+vec3 applyFog(vec3 color)
+{
+    if (uFogColor.a < 0.5)
+        return color;
+
+    vec3 ray = vWorld - uCameraPosition;
+    float x = clamp(uFog.y * ray.y, -80.0, 80.0);
+    float mean = abs(x) < 1e-3 ? 1.0 - 0.5 * x : (1.0 - exp(-x)) / x;
+
+    return mix(uFogColor.rgb, color, exp(-uFog.x * length(ray) * mean));
+}
+
 void main()
 {
     vec4 albedo = uDiffuse * vColor;
@@ -157,7 +172,7 @@ void main()
 
     float alpha = uAlphaMode == BLEND ? albedo.a : 1.0;
     if (uUnlit) {
-        fragColor = vec4(albedo.rgb, alpha);
+        fragColor = vec4(applyFog(albedo.rgb), alpha);
         return;
     }
 
@@ -227,7 +242,7 @@ void main()
         }
     }
 
-    fragColor = vec4(result, alpha);
+    fragColor = vec4(applyFog(result), alpha);
 }
 )glsl";
 

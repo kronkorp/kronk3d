@@ -22,6 +22,7 @@ Both backends produce the same image: the shading code is mirrored, and tests co
   - Skeletal animation: translation / rotation / scale channels (step, linear, cubic spline), up to 4 joints per vertex, crossfades between clips.
   - Skinning runs on the CPU and produces plain meshes, so both backends draw animated characters unchanged.
 - **Skybox**: six images (or `Skybox::gradient(zenith, horizon, ground)`, no asset needed) set on `Environment::skybox`, drawn behind the geometry and under transparency. OpenGL cube-map addressing, so common skybox assets work unchanged; identical on both backends.
+- **Fog**: `Environment::fog`, exponential height fog integrated along each view ray (it pools in low ground and is right with the camera inside it or above); applies to every surface, transparent and unlit ones included. Identical on both backends.
 - **Lighting**
   - Per-pixel Blinn-Phong, computed in linear space with sRGB output.
   - Normal mapping (tangent space, OpenGL convention), with tangents computed from the uvs.
