@@ -26,4 +26,3 @@ New behavior comes with a test: `modules/test/src` for the CPU side, `modules/te
 The existing code was not reformatted: format only what you change, with `git clang-format`, rather than whole files.
 
 - Comments explain the why, not the what. Keep the file header (`KRONK CORP, 2026 ...`) on new files.
-- Renderers cache per-mesh data: a `Mesh` edited in place needs its `revision` bumped (see `Mesh.hpp`).
