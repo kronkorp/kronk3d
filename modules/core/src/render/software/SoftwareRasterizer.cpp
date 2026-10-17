@@ -226,6 +226,9 @@ struct k3::SoftwareRasterizer::Impl
 
     AntiAliasing                      antiAliasing = AntiAliasing::None;
     std::uint32_t                     outputWidth = 0, outputHeight = 0;
+    float                             renderScale = 1.f;
+    std::uint32_t                     sceneWidth = 0, sceneHeight = 0;      // What the scene renders at (before supersampling)
+    std::vector<Math::Color>          upscaled;         // The output frame, when the scene renders smaller than it
     std::vector<Math::Color>          output;           // Anti-aliased frame (color is the frame itself without AA)
     std::vector<Math::Color>          color;            // Render resolution (twice the output's with SSAA)
     std::vector<float>                depth;
@@ -281,31 +284,64 @@ struct k3::SoftwareRasterizer::Impl
 
     FrameStats stats{};
 
+    [[nodiscard]] bool scaled() const noexcept
+    {
+        return sceneWidth != outputWidth || sceneHeight != outputHeight;
+    }
+
     void resize(std::uint32_t w, std::uint32_t h)
     {
         const std::uint32_t scale = antiAliasing == AntiAliasing::SSAA ? 2 : 1;
-        const std::size_t renderPixels = static_cast<std::size_t>(w) * scale * h * scale;
 
         outputWidth = w;
         outputHeight = h;
-        mainPass.setSize(w * scale, h * scale);
+        sceneWidth = w ? std::max<std::uint32_t>(1, static_cast<std::uint32_t>(std::lround(static_cast<float>(w) * renderScale))) : 0;
+        sceneHeight = h ? std::max<std::uint32_t>(1, static_cast<std::uint32_t>(std::lround(static_cast<float>(h) * renderScale))) : 0;
+
+        const std::size_t renderPixels = static_cast<std::size_t>(sceneWidth) * scale * sceneHeight * scale;
+
+        mainPass.setSize(sceneWidth * scale, sceneHeight * scale);
         color.assign(renderPixels, Math::Color::Black);
         depth.assign(renderPixels, 1.f);
         visibility.assign(renderPixels, nullptr);
-        output.assign(antiAliasing == AntiAliasing::None ? 0 : static_cast<std::size_t>(w) * h, Math::Color::Black);
+        output.assign(antiAliasing == AntiAliasing::None ? 0 : static_cast<std::size_t>(sceneWidth) * sceneHeight, Math::Color::Black);
+        upscaled.assign(scaled() ? static_cast<std::size_t>(w) * h : 0, Math::Color::Black);
     }
 
     [[nodiscard]] const std::vector<Math::Color>& finalColor() const noexcept
     {
-        return antiAliasing == AntiAliasing::None ? color : output;
+        return scaled() ? upscaled : antiAliasing == AntiAliasing::None ? color : output;
     }
 
+    // The frame at the scene's size: the render itself, or its anti-aliased version.
     void antiAlias()
     {
         if (antiAliasing == AntiAliasing::SSAA)
-            sw::downsample2x2(color, outputWidth, outputHeight, output, pool);
+            sw::downsample2x2(color, sceneWidth, sceneHeight, output, pool);
         else if (antiAliasing == AntiAliasing::FXAA)
-            sw::fxaa(color, outputWidth, outputHeight, output, pool);
+            sw::fxaa(color, sceneWidth, sceneHeight, output, pool);
+    }
+
+    // Enlarges the frame to the output size without filtering (each output pixel reads the scene pixel it falls in).
+    void upscale()
+    {
+        if (!scaled())
+            return;
+
+        const std::vector<Math::Color>& source = antiAliasing == AntiAliasing::None ? color : output;
+
+        pool.parallelFor(outputHeight, [&](std::size_t y) {
+            const std::size_t sourceRow = (2 * y + 1) * sceneHeight / (2 * static_cast<std::size_t>(outputHeight));
+
+            for (std::size_t x = 0; x < outputWidth; ++x)
+                upscaled[y * outputWidth + x] = source[sourceRow * sceneWidth + (2 * x + 1) * sceneWidth / (2 * static_cast<std::size_t>(outputWidth))];
+        });
+    }
+
+    // What the 2D overlay is drawn on.
+    [[nodiscard]] std::vector<Math::Color>& finalFrame() noexcept
+    {
+        return scaled() ? upscaled : antiAliasing == AntiAliasing::None ? color : output;
     }
 
     // Looks through `layerCamera`: view, projection and what depends on them.
@@ -425,7 +461,7 @@ struct k3::SoftwareRasterizer::Impl
 
     void drawOverlays()
     {
-        std::vector<Math::Color>& frame = antiAliasing == AntiAliasing::None ? color : output;
+        std::vector<Math::Color>& frame = finalFrame();
         const auto width = static_cast<int>(outputWidth), height = static_cast<int>(outputHeight);
 
         for (const Overlay& overlay : overlays) {
@@ -1042,6 +1078,20 @@ std::uint32_t k3::SoftwareRasterizer::height() const noexcept
     return m_impl->outputHeight;
 }
 
+void k3::SoftwareRasterizer::setRenderScale(float scale)
+{
+    scale = std::clamp(scale, 0.05f, 1.f);
+    if (scale == m_impl->renderScale)
+        return;
+    m_impl->renderScale = scale;
+    m_impl->resize(m_impl->outputWidth, m_impl->outputHeight);
+}
+
+float k3::SoftwareRasterizer::renderScale() const noexcept
+{
+    return m_impl->renderScale;
+}
+
 void k3::SoftwareRasterizer::setAntiAliasing(AntiAliasing mode)
 {
     if (mode == m_impl->antiAliasing)
@@ -1145,6 +1195,7 @@ void k3::SoftwareRasterizer::endFrame()
         impl.drawLines(layer);
     }
     impl.antiAlias();
+    impl.upscale();
     impl.drawOverlays();
 
     // Draw states point into the recorded materials: drop both together.
