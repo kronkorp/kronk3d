@@ -59,6 +59,8 @@ jobs:
         run: |
           xvfb-run -a ./build/bin/kronk3d_example --backend software --scene 4 --screenshot software.png
           xvfb-run -a ./build/bin/kronk3d_example --backend opengl --scene 4 --screenshot opengl.png
+          xvfb-run -a ./build/bin/kronk3d_arena --backend software --screenshot arena_software.png --seconds 0.3
+          xvfb-run -a ./build/bin/kronk3d_arena --backend opengl --screenshot arena_opengl.png --seconds 0.3
           xvfb-run -a ./build/bin/kronk3d_bench example/assets/spot/spot.obj --size 320x240 --frames 3
 
       # Another project consuming the installed package through find_package(kronk3d).
