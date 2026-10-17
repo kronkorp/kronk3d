@@ -1,6 +1,6 @@
 # kronk3d
 
-A small C++23 3D rasterization library with two interchangeable backends behind a single interface:
+A small C++20 3D rasterization library with two interchangeable backends behind a single interface:
 
 - **Software**: a multithreaded, tile-based CPU rasterizer that renders into memory and needs no GPU or window.
 - **OpenGL 3.3 core**: renders into the OpenGL context your application already has.
@@ -44,7 +44,7 @@ Both backends produce the same image: the shading code is mirrored, and tests co
 
 ## Building
 
-Requirements: CMake 3.20+ and a C++23 compiler (GCC 13+, Clang 18+, or MSVC from Visual Studio 2022 or newer).
+Requirements: CMake 3.20+ and a C++20 compiler (GCC 13+, Clang 18+, or MSVC from Visual Studio 2022 or newer).
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
