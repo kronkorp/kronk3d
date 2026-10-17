@@ -39,6 +39,7 @@ namespace k3
     {
         std::size_t drawCalls = 0;
         std::size_t triangles = 0;      // Submitted, before culling / clipping
+        std::size_t culledDraws = 0;    // Draws outside the view, not rendered by the main pass (they can still cast shadows)
         double      frameMs   = 0.0;    // CPU time spent in endFrame()
     };
 

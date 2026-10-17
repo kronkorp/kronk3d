@@ -3,6 +3,7 @@
 #include "utils/Log.hpp"
 #include "Program.hpp"
 #include "Shaders.hpp"
+#include "render/Frustum.hpp"
 #include "render/ShadowFit.hpp"
 #include "render/software/Shading.hpp"
 #include <algorithm>
@@ -54,6 +55,7 @@ namespace
         const GpuMesh*                      gpu = nullptr;
         k3::Math::Bounds3f                  bounds{};
         float                               viewDepth = 0.f;
+        bool                                visible = true;     // In the camera frustum: shadow passes ignore it
     };
 
     const k3::Material& defaultMaterial()
@@ -721,6 +723,8 @@ struct k3::HardwareRasterizer::Impl
         Disable(BLEND);
 
         for (std::size_t d = 0; d < firstBlended; ++d) {
+            if (!commands[d].visible)
+                continue;
             if (materialOf(commands[d]).doubleSided) {
                 Disable(CULL_FACE);
             } else {
@@ -737,6 +741,8 @@ struct k3::HardwareRasterizer::Impl
         BlendFuncSeparate(SRC_ALPHA, ONE_MINUS_SRC_ALPHA, ONE, ONE_MINUS_SRC_ALPHA);
         Enable(CULL_FACE);
         for (std::size_t d = firstBlended; d < commands.size(); ++d) {
+            if (!commands[d].visible)
+                continue;
             if (materialOf(commands[d]).doubleSided) {
                 CullFace(FRONT);
                 drawShaded(commands[d]);
@@ -877,9 +883,13 @@ void k3::HardwareRasterizer::endFrame()
         return;
     }
 
+    const Frustum frustum(impl.viewProjection);
+
     for (DrawCommand& command : impl.commands) {
         command.gpu = &impl.meshFor(command.mesh);
         command.bounds = command.gpu->bounds.transformed(command.transform);
+        command.visible = frustum.intersects(command.bounds);
+        impl.stats.culledDraws += !command.visible;
     }
 
     // Same ordering as the software backend: opaque in submission order, blended farthest first.
