@@ -1,6 +1,6 @@
 // Third-person showcase of the renderer: a robot you drive around an arena.
 //     kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night]
-//                   [--screenshot file.png [--seconds S]]
+//                   [--scale 0.05-1] [--screenshot file.png [--seconds S]]
 //
 // ZQSD / WASD: move (relative to the camera)    Shift: run     Space: jump
 // Mouse / arrows: camera                         T: time of day    F: fog    V: anti-aliasing    H: HUD
@@ -44,6 +44,7 @@ namespace
         k3::Backend      backend = k3::Backend::OpenGL;
         k3::AntiAliasing antiAliasing = k3::AntiAliasing::FXAA;
         std::size_t      timeOfDay = 0;
+        float            renderScale = 1.f;
         std::string      screenshot{};
         float            seconds = 3.f;
     };
@@ -109,6 +110,8 @@ namespace
                 if (found == TIMES.end())
                     return std::nullopt;
                 options.timeOfDay = static_cast<std::size_t>(found - TIMES.begin());
+            } else if (arg == "--scale" && hasValue) {
+                options.renderScale = static_cast<float>(std::atof(argv[++i]));
             } else if (arg == "--screenshot" && hasValue) {
                 options.screenshot = argv[++i];
             } else if (arg == "--seconds" && hasValue) {
@@ -298,7 +301,7 @@ int main(int argc, char** argv)
     const auto options = parseOptions(argc, argv);
 
     if (!options) {
-        std::cerr << "usage: " << argv[0] << " [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--screenshot file.png [--seconds S]]" << std::endl;
+        std::cerr << "usage: " << argv[0] << " [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--scale 0.05-1] [--screenshot file.png [--seconds S]]" << std::endl;
         return 2;
     }
 
@@ -331,7 +334,7 @@ int main(int argc, char** argv)
         }
         presenter = std::move(*created);
     }
-    auto created = k3::createRasterizer(options->backend, {.width = WIDTH, .height = HEIGHT, .glLoader = loader, .antiAliasing = options->antiAliasing});
+    auto created = k3::createRasterizer(options->backend, {.width = WIDTH, .height = HEIGHT, .glLoader = loader, .antiAliasing = options->antiAliasing, .renderScale = options->renderScale});
 
     if (!created) {
         std::cerr << "Cannot initialize rendering: " << created.error() << std::endl;
@@ -375,6 +378,12 @@ int main(int argc, char** argv)
                 world.toggleFog();
             else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::H)
                 showHud = !showHud;
+            else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::R) {
+                // Full resolution, half, then big pixels.
+                const float scale = rasterizer->renderScale();
+
+                rasterizer->setRenderScale(scale > 0.9f ? 0.5f : scale > 0.4f ? 0.25f : 1.f);
+            }
             else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::V) {
                 const auto next = rasterizer->antiAliasing() == k3::AntiAliasing::None   ? k3::AntiAliasing::FXAA
                                   : rasterizer->antiAliasing() == k3::AntiAliasing::FXAA ? k3::AntiAliasing::SSAA
@@ -413,7 +422,7 @@ int main(int argc, char** argv)
         ++fpsFrames;
         if (fpsTime >= 0.5f) {
             fps = static_cast<int>(static_cast<float>(fpsFrames) / fpsTime + 0.5f);
-            window->setTitle("kronk3d arena - " + std::string(rasterizer->name()) + ", " + toString(rasterizer->antiAliasing()) + ", " + world.timeOfDay().name
+            window->setTitle("kronk3d arena - " + std::string(rasterizer->name()) + ", " + toString(rasterizer->antiAliasing()) + ", x" + std::to_string(rasterizer->renderScale()).substr(0, 4) + ", " + world.timeOfDay().name
                              + (world.fog() ? ", fog" : ", no fog") + " - " + std::to_string(fps) + " fps, "
                              + std::to_string(rasterizer->stats().culledDraws) + "/" + std::to_string(rasterizer->stats().drawCalls) + " draws culled");
             fpsTime = 0.f;

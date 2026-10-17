@@ -12,6 +12,7 @@ Both backends produce the same image: the shading code is mirrored, and tests co
 - **Rendering API**
   - A frame is `beginFrame(camera, environment)`, any number of `draw(...)` calls, then `endFrame()`.
   - Backends are created at runtime with `createRasterizer(Backend::Software | Backend::OpenGL)`.
+  - **Render scale** (`setRenderScale`, `RasterizerConfig::renderScale`): the scene renders at a fraction of the output size and is enlarged with no filtering, for a low-resolution look or to save fill rate; the 2D overlay stays sharp.
   - **2D overlay** for a HUD or menus, identical on both backends: `drawRect` and `drawImage` (sprite sheets, tint, flipping), in output pixels, drawn over the 3D frame after anti-aliasing.  - Draws outside the camera frustum are skipped by the main pass (`FrameStats::culledDraws`); they still cast shadows.
 - **Assets**
   - Wavefront **OBJ + MTL** loading: polygons with any number of sides, negative indices, vertex colors.
@@ -188,7 +189,7 @@ Textures use their own sampler (`Nearest` for pixel art) and keep their alpha.
 
 ### Arena
 
-`kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--screenshot file.png [--seconds S]]`
+`kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--scale 0.05-1] [--screenshot file.png [--seconds S]]`
 
 A third-person showcase: you drive the robot of the Godot 3D platformer demo (`example/assets/robot`,
 MIT) around a stone arena with walls, stairs, 170 crates, torch pillars and a glass panel. It uses the
@@ -203,6 +204,7 @@ overlay (counters drawn with a pixel font, and a minimap).
 | `T` | Day, sunset, night |
 | `F` | Fog on / off |
 | `V` | Anti-aliasing: none, FXAA, SSAA |
+| `R` | Render resolution: full, half, quarter (big pixels); the HUD stays sharp |
 | `H` | Hide / show the HUD (frames per second, draw calls, draws culled) |
 
 With `--screenshot` a scripted run is rendered and saved; the software backend then needs no window.

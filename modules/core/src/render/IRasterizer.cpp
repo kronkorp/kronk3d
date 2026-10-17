@@ -25,6 +25,7 @@ k3::Result<std::unique_ptr<k3::IRasterizer>> k3::createRasterizer(Backend backen
         case Backend::Software: {
             auto rasterizer = std::make_unique<SoftwareRasterizer>(config.width, config.height, config.threads);
             rasterizer->setAntiAliasing(config.antiAliasing);
+            rasterizer->setRenderScale(config.renderScale);
             return std::unique_ptr<IRasterizer>(std::move(rasterizer));
         }
         case Backend::OpenGL: {
@@ -32,6 +33,7 @@ k3::Result<std::unique_ptr<k3::IRasterizer>> k3::createRasterizer(Backend backen
             if (!rasterizer)
                 return Error{rasterizer.error()};
             (*rasterizer)->setAntiAliasing(config.antiAliasing);
+            (*rasterizer)->setRenderScale(config.renderScale);
             return std::unique_ptr<IRasterizer>(std::move(*rasterizer));
         }
     }

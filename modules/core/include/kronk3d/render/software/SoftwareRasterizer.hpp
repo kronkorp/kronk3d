@@ -38,6 +38,8 @@ namespace k3
 
             void setAntiAliasing(AntiAliasing mode) override;
             [[nodiscard]] AntiAliasing antiAliasing() const noexcept override;
+            void setRenderScale(float scale) override;
+            [[nodiscard]] float renderScale() const noexcept override;
 
             void beginFrame(const Camera& camera, const Environment& environment) override;
             using IRasterizer::draw;

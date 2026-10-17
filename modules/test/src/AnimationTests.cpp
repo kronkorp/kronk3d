@@ -33,6 +33,8 @@ namespace
             std::uint32_t height() const noexcept override { return 1; }
             void setAntiAliasing(AntiAliasing) override {}
             AntiAliasing antiAliasing() const noexcept override { return AntiAliasing::None; }
+            void setRenderScale(float) override {}
+            float renderScale() const noexcept override { return 1.f; }
             void beginFrame(const Camera&, const Environment&) override { calls.clear(); }
             void draw(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material>, const Matrix4& transform) override
             {

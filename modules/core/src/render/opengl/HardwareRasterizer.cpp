@@ -224,9 +224,12 @@ struct k3::HardwareRasterizer::Impl
 
     AntiAliasing  antiAliasing = AntiAliasing::None;
     std::uint32_t width = 0, height = 0;                // Output size
-    std::uint32_t renderWidth = 0, renderHeight = 0;    // Twice the output with SSAA
+    float renderScale = 1.f;
+    std::uint32_t sceneWidth = 0, sceneHeight = 0;      // What the scene renders at, before supersampling
+    std::uint32_t renderWidth = 0, renderHeight = 0;    // Twice the scene's size with SSAA
     GLuint fbo = 0, colorTexture = 0, depthTexture = 0;
     GLuint postFbo = 0, postTexture = 0;                // Anti-aliased frame
+    GLuint upFbo = 0, upTexture = 0;                    // The frame enlarged to the output size (renderScale < 1)
     GLuint shadowFbo = 0, shadowTexture = 0;           // Texture array: one layer per cascade
     std::uint32_t shadowSize = 0;
     std::size_t shadowLayers = 0;
@@ -261,12 +264,28 @@ struct k3::HardwareRasterizer::Impl
             DeleteFramebuffers(1, &postFbo);
         if (postTexture)
             DeleteTextures(1, &postTexture);
-        fbo = colorTexture = depthTexture = postFbo = postTexture = 0;
+        if (upFbo)
+            DeleteFramebuffers(1, &upFbo);
+        if (upTexture)
+            DeleteTextures(1, &upTexture);
+        fbo = colorTexture = depthTexture = postFbo = postTexture = upFbo = upTexture = 0;
     }
 
-    [[nodiscard]] GLuint finalFbo() const noexcept
+    [[nodiscard]] bool scaled() const noexcept
+    {
+        return sceneWidth != width || sceneHeight != height;
+    }
+
+    // The frame at the scene's size: the render itself, or its anti-aliased version.
+    [[nodiscard]] GLuint sceneFbo() const noexcept
     {
         return antiAliasing == AntiAliasing::None ? fbo : postFbo;
+    }
+
+    // The frame at the output size, what the overlay is drawn on and what is shown.
+    [[nodiscard]] GLuint finalFbo() const noexcept
+    {
+        return scaled() ? upFbo : sceneFbo();
     }
 
     static GLuint makeTexture(GLint internalFormat, std::uint32_t w, std::uint32_t h, GLenum format, GLenum type, GLint filter = NEAREST)
@@ -291,8 +310,10 @@ struct k3::HardwareRasterizer::Impl
         releaseTarget();
         width = w;
         height = h;
-        renderWidth = w * scale;
-        renderHeight = h * scale;
+        sceneWidth = w ? std::max<std::uint32_t>(1, static_cast<std::uint32_t>(std::lround(static_cast<float>(w) * renderScale))) : 0;
+        sceneHeight = h ? std::max<std::uint32_t>(1, static_cast<std::uint32_t>(std::lround(static_cast<float>(h) * renderScale))) : 0;
+        renderWidth = sceneWidth * scale;
+        renderHeight = sceneHeight * scale;
         if (w == 0 || h == 0)
             return;
 
@@ -307,12 +328,21 @@ struct k3::HardwareRasterizer::Impl
             log(LogLevel::Error, "OpenGL: incomplete render target {}x{}", renderWidth, renderHeight);
 
         if (antiAliasing != AntiAliasing::None) {
-            postTexture = makeTexture(static_cast<GLint>(SRGB8_ALPHA8), w, h, RGBA, UNSIGNED_BYTE);
+            postTexture = makeTexture(static_cast<GLint>(SRGB8_ALPHA8), sceneWidth, sceneHeight, RGBA, UNSIGNED_BYTE);
             GenFramebuffers(1, &postFbo);
             BindFramebuffer(FRAMEBUFFER, postFbo);
             FramebufferTexture2D(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, postTexture, 0);
             if (CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE)
-                log(LogLevel::Error, "OpenGL: incomplete anti-aliasing target {}x{}", w, h);
+                log(LogLevel::Error, "OpenGL: incomplete anti-aliasing target {}x{}", sceneWidth, sceneHeight);
+        }
+
+        if (scaled()) {
+            upTexture = makeTexture(static_cast<GLint>(SRGB8_ALPHA8), w, h, RGBA, UNSIGNED_BYTE);
+            GenFramebuffers(1, &upFbo);
+            BindFramebuffer(FRAMEBUFFER, upFbo);
+            FramebufferTexture2D(FRAMEBUFFER, COLOR_ATTACHMENT0, TEXTURE_2D, upTexture, 0);
+            if (CheckFramebufferStatus(FRAMEBUFFER) != FRAMEBUFFER_COMPLETE)
+                log(LogLevel::Error, "OpenGL: incomplete output target {}x{}", w, h);
         }
         BindFramebuffer(FRAMEBUFFER, 0);
     }
@@ -324,7 +354,7 @@ struct k3::HardwareRasterizer::Impl
             return;
 
         BindFramebuffer(FRAMEBUFFER, postFbo);
-        Viewport(0, 0, static_cast<GLsizei>(width), static_cast<GLsizei>(height));
+        Viewport(0, 0, static_cast<GLsizei>(sceneWidth), static_cast<GLsizei>(sceneHeight));
         Enable(FRAMEBUFFER_SRGB);
         Disable(DEPTH_TEST);
         Disable(CULL_FACE);
@@ -338,6 +368,18 @@ struct k3::HardwareRasterizer::Impl
         BindVertexArray(fullscreenVao);
         DrawArrays(TRIANGLES, 0, 3);
         Disable(FRAMEBUFFER_SRGB);
+    }
+
+    // Enlarges the scene's frame to the output size without filtering (raw bytes: no sRGB conversion).
+    void upscale()
+    {
+        if (!scaled())
+            return;
+
+        Disable(FRAMEBUFFER_SRGB);
+        BindFramebuffer(READ_FRAMEBUFFER, sceneFbo());
+        BindFramebuffer(DRAW_FRAMEBUFFER, upFbo);
+        BlitFramebuffer(0, 0, static_cast<GLint>(sceneWidth), static_cast<GLint>(sceneHeight), 0, 0, static_cast<GLint>(width), static_cast<GLint>(height), COLOR_BUFFER_BIT, NEAREST);
     }
 
     void ensureShadowTarget(std::uint32_t size, std::size_t layers)
@@ -981,6 +1023,20 @@ std::uint32_t k3::HardwareRasterizer::height() const noexcept
     return m_impl->height;
 }
 
+void k3::HardwareRasterizer::setRenderScale(float scale)
+{
+    scale = std::clamp(scale, 0.05f, 1.f);
+    if (scale == m_impl->renderScale)
+        return;
+    m_impl->renderScale = scale;
+    m_impl->resize(m_impl->width, m_impl->height);
+}
+
+float k3::HardwareRasterizer::renderScale() const noexcept
+{
+    return m_impl->renderScale;
+}
+
 void k3::HardwareRasterizer::setAntiAliasing(AntiAliasing mode)
 {
     if (mode == m_impl->antiAliasing)
@@ -1058,6 +1114,7 @@ void k3::HardwareRasterizer::endFrame()
     impl.setFrameUniforms(lights, shadowLight, cascades);
     impl.renderMain(blendedStart);
     impl.antiAlias();
+    impl.upscale();
     impl.drawOverlays();
     impl.present();
     impl.restoreState();
