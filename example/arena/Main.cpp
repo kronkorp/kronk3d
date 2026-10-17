@@ -139,12 +139,32 @@ namespace
             World(Level level, Player player, std::size_t timeOfDay, bool lighterShadows)
                 : m_level(std::move(level)), m_player(std::move(player)), m_lighterShadows(lighterShadows)
             {
+                // A soft round sprite for the embers, tinted per particle.
+                k3::Image glow(32, 32, Color::Transparent);
+
+                for (std::uint32_t y = 0; y < 32; ++y) {
+                    for (std::uint32_t x = 0; x < 32; ++x) {
+                        const float dx = (static_cast<float>(x) - 15.5f) / 16.f, dy = (static_cast<float>(y) - 15.5f) / 16.f;
+                        const float falloff = std::max(0.f, 1.f - std::sqrt(dx * dx + dy * dy));
+                        std::uint8_t* texel = glow.texel(x, y);
+
+                        texel[0] = texel[1] = texel[2] = 255;
+                        texel[3] = static_cast<std::uint8_t>(255.f * falloff * falloff);
+                    }
+                }
+                m_emberMaterial = std::make_shared<k3::Material>();
+                m_emberMaterial->unlit = true;
+                m_emberMaterial->castShadows = false;
+                m_emberMaterial->alphaMode = k3::AlphaMode::Blend;
+                m_emberMaterial->diffuseMap = std::make_shared<k3::Texture>(std::move(glow));
+
                 setTimeOfDay(timeOfDay);
                 m_player.update(0.f, {}, 0.f, m_level);
             }
 
             void update(float dt, const Input& input, float yawTurn, float pitchTurn)
             {
+                m_clock += dt;
                 m_yaw += yawTurn;
                 m_pitch = std::clamp(m_pitch + pitchTurn, -1.25f, 0.35f);
                 m_player.update(dt, input, m_yaw, m_level);
@@ -164,7 +184,9 @@ namespace
 
             void draw(k3::IRasterizer& rasterizer)
             {
-                rasterizer.beginFrame(camera(), environment());
+                const k3::Camera view = camera();
+
+                rasterizer.beginFrame(view, environment());
                 m_level.draw(rasterizer);
                 m_player.draw(rasterizer);
 
@@ -177,6 +199,7 @@ namespace
 
                     rasterizer.drawBounds({{feet.x - Player::RADIUS, feet.y, feet.z - Player::RADIUS}, {feet.x + Player::RADIUS, feet.y + Player::HEIGHT, feet.z + Player::RADIUS}}, Color{0.2f, 1.f, 0.3f, 1.f}, k3::Math::Matrix4::identity(), false);
                 }
+                drawEmbers(rasterizer, view);
             }
 
         private:
@@ -224,6 +247,33 @@ namespace
                 return camera;
             }
 
+            // Embers rising from every torch: a function of time only (no state), all drawn in one call.
+            void drawEmbers(k3::IRasterizer& rasterizer, const k3::Camera& view)
+            {
+                constexpr int PER_TORCH = 28;
+                constexpr float LIFE = 2.2f;
+
+                m_embers.clear();
+                for (std::size_t torch = 0; torch < m_level.torches().size(); ++torch) {
+                    const Vector3f origin = m_level.torches()[torch].position - Vector3f{0.f, 0.15f, 0.f};
+
+                    for (int i = 0; i < PER_TORCH; ++i) {
+                        const float seed = static_cast<float>(torch * 97 + static_cast<std::size_t>(i) * 31);
+                        const float age = std::fmod(m_clock + LIFE * static_cast<float>(i) / PER_TORCH + std::fmod(seed * 0.37f, 1.f), LIFE) / LIFE;    // 0 new, 1 gone
+                        const float angle = seed * 2.399f;                                                                                         // Golden angle: spread evenly
+                        const float drift = 0.35f * age;
+
+                        m_embers.add({
+                            .position = origin + Vector3f{std::cos(angle) * drift, 0.2f + 2.2f * age, std::sin(angle) * drift},
+                            .size = {0.22f * (1.f - 0.6f * age), 0.22f * (1.f - 0.6f * age)},
+                            .color = {1.f, 0.55f - 0.3f * age, 0.15f, 0.9f * (1.f - age)},
+                            .rotation = angle,
+                        });
+                    }
+                }
+                m_embers.draw(rasterizer, view, m_emberMaterial);
+            }
+
             [[nodiscard]] k3::Environment environment() const
             {
                 const TimeOfDay& time = TIMES[m_time];
@@ -259,6 +309,9 @@ namespace
             Player       m_player;
             k3::Skybox   m_sky;
             std::size_t  m_time = 0;
+            k3::BillboardBatch                 m_embers;
+            std::shared_ptr<k3::Material>      m_emberMaterial;
+            float                              m_clock = 0.f;        // Seconds since the start
             bool         m_lighterShadows;
             bool         m_fog = true;
             bool         m_bounds = false;
