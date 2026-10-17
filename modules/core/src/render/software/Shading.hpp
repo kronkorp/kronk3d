@@ -82,6 +82,8 @@ namespace k3::sw
         Math::Vector3f viewDirection{};     // Orthographic cameras: the view vector is the same everywhere
         bool           orthographic = false;
         Math::Color    ambient{};
+        bool           hemisphere = false;      // Ambient light between `ambient` (up) and `ambientGround` (down)
+        Math::Color    ambientGround{};
         FogState       fog{};
         PreparedLight  lights[MAX_LIGHTS]{};
         std::size_t    lightCount = 0;

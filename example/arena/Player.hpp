@@ -32,6 +32,9 @@ class Player
         void update(float dt, const Input& input, float cameraYaw, const Level& level);
         void draw(k3::IRasterizer& rasterizer);
 
+        // Lit with each triangle's own normal (a faceted robot) or with smooth normals.
+        void toggleFlatShading();
+
         [[nodiscard]] const k3::Math::Vector3f& position() const noexcept { return m_position; }
         [[nodiscard]] std::string_view clip() const noexcept { return m_animator.clip(); }
 
