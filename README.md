@@ -13,6 +13,7 @@ Both backends produce the same image: the shading code is mirrored, and tests co
   - A frame is `beginFrame(camera, environment)`, any number of `draw(...)` calls, then `endFrame()`.
   - Backends are created at runtime with `createRasterizer(Backend::Software | Backend::OpenGL)`.
   - **Layers** (`beginLayer(camera)`): what follows is drawn over the scene with its own camera and a cleared depth buffer, for a first-person weapon with its own field of view that never goes through walls. It shares the lights, the fog and the shadows it receives (it casts none).
+  - **Debug lines** (`drawLine`, `drawBounds`): world-space segments and boxes, depth-tested or always visible, per layer.
   - **2D overlay** for a HUD or menus, identical on both backends: `drawRect` and `drawImage` (sprite sheets, tint, flipping), in output pixels, drawn over the 3D frame after anti-aliasing.  - Draws outside the camera frustum are skipped by the main pass (`FrameStats::culledDraws`); they still cast shadows.
 - **Assets**
   - Wavefront **OBJ + MTL** loading: polygons with any number of sides, negative indices, vertex colors.
@@ -189,7 +190,7 @@ Textures use their own sampler (`Nearest` for pixel art) and keep their alpha.
 
 ### Arena
 
-`kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--screenshot file.png [--seconds S]]`
+`kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--bounds] [--screenshot file.png [--seconds S]]`
 
 A third-person showcase: you drive the robot of the Godot 3D platformer demo (`example/assets/robot`,
 MIT) around a stone arena with walls, stairs, 170 crates, torch pillars and a glass panel. It uses the
@@ -205,6 +206,7 @@ overlay (counters drawn with a pixel font, and a minimap).
 | `F` | Fog on / off |
 | `V` | Anti-aliasing: none, FXAA, SSAA |
 | `H` | Hide / show the HUD (frames per second, draw calls, draws culled) |
+| `B` | Collision boxes, drawn as debug lines |
 
 With `--screenshot` a scripted run is rendered and saved; the software backend then needs no window.
 

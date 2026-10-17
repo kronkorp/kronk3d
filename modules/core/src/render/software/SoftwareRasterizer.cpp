@@ -250,6 +250,13 @@ struct k3::SoftwareRasterizer::Impl
     // Frame data, indexed by draw (position in `commands` once sorted).
     std::vector<DrawCommand>    commands;
     std::vector<Overlay>        overlays;
+    struct Line
+    {
+        DebugLine   line;
+        bool        depthTested;
+        std::size_t layer;
+    };
+    std::vector<Line>           lines;              // Debug lines, drawn after the geometry of their layer
     std::vector<Camera>         layerCameras;       // Of each layer, the frame's own first
     std::vector<std::size_t>    layerStarts;        // Index in `commands` where each layer's draws begin
     bool                        clearBackground = true;     // Only the first layer starts from the clear color / the sky
@@ -309,6 +316,75 @@ struct k3::SoftwareRasterizer::Impl
         camera = layerCamera;
         view = layerCamera.view();
         mainPass.viewProjection = layerCamera.projectionMatrix(aspect) * view;
+    }
+
+    /* Debug lines: one pixel wide, drawn over the layer's geometry */
+
+    // Clips the segment to the view volume in clip space; false when nothing is left.
+    static bool clipSegment(Math::Vector4f& a, Math::Vector4f& b) noexcept
+    {
+        float t0 = 0.f, t1 = 1.f;
+
+        for (int plane = 0; plane < 6; ++plane) {
+            const float sign = (plane & 1) ? -1.f : 1.f;        // w + c >= 0, then w - c >= 0
+            const auto coordinate = [&](const Math::Vector4f& p) { return plane < 2 ? p.x : plane < 4 ? p.y : p.z; };
+            const float da = a.w + sign * coordinate(a), db = b.w + sign * coordinate(b);
+
+            if (da < 0.f && db < 0.f)
+                return false;
+            if (da < 0.f)
+                t0 = std::max(t0, da / (da - db));
+            else if (db < 0.f)
+                t1 = std::min(t1, da / (da - db));
+        }
+        if (t0 > t1)
+            return false;
+
+        const Math::Vector4f from = a, direction = b - a;
+
+        a = from + t0 * direction;
+        b = from + t1 * direction;
+        return true;
+    }
+
+    void drawLines(std::size_t layer)
+    {
+        constexpr float DEPTH_BIAS = 5e-5f;     // Lines on a surface (the edges of a box) win against it
+        const auto width = static_cast<float>(mainPass.width), height = static_cast<float>(mainPass.height);
+
+        for (const Line& entry : lines) {
+            if (entry.layer != layer)
+                continue;
+
+            Math::Vector4f a = mainPass.viewProjection * Math::Vector4f{entry.line.from.x, entry.line.from.y, entry.line.from.z, 1.f};
+            Math::Vector4f b = mainPass.viewProjection * Math::Vector4f{entry.line.to.x, entry.line.to.y, entry.line.to.z, 1.f};
+
+            if (!clipSegment(a, b))
+                continue;
+
+            // To pixels (y down) and depth in [0, 1].
+            const float x0 = (a.x / a.w * 0.5f + 0.5f) * width, y0 = (0.5f - a.y / a.w * 0.5f) * height, z0 = a.z / a.w * 0.5f + 0.5f;
+            const float x1 = (b.x / b.w * 0.5f + 0.5f) * width, y1 = (0.5f - b.y / b.w * 0.5f) * height, z1 = b.z / b.w * 0.5f + 0.5f;
+            const float steps = std::ceil(std::max(std::abs(x1 - x0), std::abs(y1 - y0)));
+            const Math::Color& c = entry.line.color;
+
+            for (float i = 0.f; i < steps; i += 1.f) {
+                const float t = i / steps;
+                const auto x = static_cast<std::int32_t>(std::floor(x0 + (x1 - x0) * t));
+                const auto y = static_cast<std::int32_t>(std::floor(y0 + (y1 - y0) * t));
+
+                if (x < 0 || y < 0 || x >= static_cast<std::int32_t>(mainPass.width) || y >= static_cast<std::int32_t>(mainPass.height))
+                    continue;
+
+                const std::size_t index = static_cast<std::size_t>(y) * mainPass.width + static_cast<std::size_t>(x);
+
+                if (entry.depthTested && z0 + (z1 - z0) * t - DEPTH_BIAS > depth[index])
+                    continue;
+                Math::Color& target = color[index];
+
+                target = {c.r * c.a + target.r * (1.f - c.a), c.g * c.a + target.g * (1.f - c.a), c.b * c.a + target.b * (1.f - c.a), c.a + target.a * (1.f - c.a)};
+            }
+        }
     }
 
     /* Sky */
@@ -996,6 +1072,7 @@ void k3::SoftwareRasterizer::beginFrame(const Camera& camera, const Environment&
     impl.layerCameras = {camera};
     impl.layerStarts = {0};
     impl.commands.clear();
+    impl.lines.clear();
     impl.overlays.clear();
     impl.stats = {};
 }
@@ -1013,6 +1090,12 @@ void k3::SoftwareRasterizer::draw(std::shared_ptr<const Mesh> mesh, std::shared_
     m_impl->stats.drawCalls++;
     m_impl->stats.triangles += mesh->triangleCount();
     m_impl->commands.push_back({std::move(mesh), std::move(material), transform});
+}
+
+void k3::SoftwareRasterizer::drawLines(std::span<const DebugLine> lines, bool depthTested)
+{
+    for (const DebugLine& line : lines)
+        m_impl->lines.push_back({line, depthTested, m_impl->layerStarts.size() - 1});
 }
 
 void k3::SoftwareRasterizer::draw2D(std::shared_ptr<Texture> texture, const Rect& destination, const Rect& source, const Math::Color& tint)
@@ -1059,6 +1142,7 @@ void k3::SoftwareRasterizer::endFrame()
         impl.planMainPass(blendedStart);
         impl.runGeometry(impl.mainPass);
         impl.pool.parallelFor(impl.mainPass.tileCount(), [&](std::size_t tile) { impl.renderTile(tile); });
+        impl.drawLines(layer);
     }
     impl.antiAlias();
     impl.drawOverlays();
@@ -1066,6 +1150,7 @@ void k3::SoftwareRasterizer::endFrame()
     // Draw states point into the recorded materials: drop both together.
     impl.drawStates.clear();
     impl.commands.clear();
+    impl.lines.clear();
     impl.overlays.clear();
     impl.clearBackground = true;
     impl.shading.shadow = sw::ShadowMap{};
