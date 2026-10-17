@@ -26,6 +26,7 @@
 
 #include <kronk3d/render/Environment.hpp>
 #include <kronk3d/render/IRasterizer.hpp>
+#include <kronk3d/render/Skybox.hpp>
 #include <kronk3d/render/opengl/HardwareRasterizer.hpp>
 #include <kronk3d/render/opengl/ImagePresenter.hpp>
 #include <kronk3d/render/software/SoftwareRasterizer.hpp>
