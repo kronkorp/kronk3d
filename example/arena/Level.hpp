@@ -42,6 +42,8 @@ class Level
         void addTorch(float x, float z);
 
         std::vector<Prop>      m_props;
+        Prop                   m_tuft;              // One small pyramid, drawn at thousands of places
+        std::vector<k3::Math::Matrix4> m_tufts;
         std::vector<Box>       m_solids;
         std::vector<k3::Light> m_torches;
 };

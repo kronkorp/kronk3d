@@ -150,6 +150,8 @@ namespace k3::gl
         X(VertexAttrib4f,           void,           (GLuint, GLfloat, GLfloat, GLfloat, GLfloat)) \
         X(DrawArrays,               void,           (GLenum, GLint, GLsizei)) \
         X(DrawElements,             void,           (GLenum, GLsizei, GLenum, const void*)) \
+        X(DrawElementsInstanced,    void,           (GLenum, GLsizei, GLenum, const void*, GLsizei)) \
+        X(VertexAttribDivisor,      void,           (GLuint, GLuint)) \
         X(CreateShader,             GLuint,         (GLenum)) \
         X(ShaderSource,             void,           (GLuint, GLsizei, const GLchar* const*, const GLint*)) \
         X(CompileShader,            void,           (GLuint)) \
