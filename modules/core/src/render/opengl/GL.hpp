@@ -43,6 +43,7 @@ namespace k3::gl
     inline constexpr GLenum COLOR_BUFFER_BIT        = 0x00004000;
     inline constexpr GLenum TRIANGLES               = 0x0004;
     inline constexpr GLenum LESS                    = 0x0201;
+    inline constexpr GLenum LEQUAL                  = 0x0203;
     inline constexpr GLenum SRC_ALPHA               = 0x0302;
     inline constexpr GLenum ONE_MINUS_SRC_ALPHA     = 0x0303;
     inline constexpr GLenum ONE                     = 1;
@@ -58,6 +59,8 @@ namespace k3::gl
     inline constexpr GLenum UNPACK_ALIGNMENT        = 0x0CF5;
     inline constexpr GLenum TEXTURE_2D              = 0x0DE1;
     inline constexpr GLenum TEXTURE_2D_ARRAY        = 0x8C1A;
+    inline constexpr GLenum TEXTURE_CUBE_MAP        = 0x8513;
+    inline constexpr GLenum TEXTURE_CUBE_MAP_POSITIVE_X = 0x8515;
     inline constexpr GLenum UNSIGNED_BYTE           = 0x1401;
     inline constexpr GLenum UNSIGNED_INT            = 0x1405;
     inline constexpr GLenum FLOAT                   = 0x1406;
@@ -74,6 +77,7 @@ namespace k3::gl
     inline constexpr GLenum TEXTURE_MIN_FILTER      = 0x2801;
     inline constexpr GLenum TEXTURE_WRAP_S          = 0x2802;
     inline constexpr GLenum TEXTURE_WRAP_T          = 0x2803;
+    inline constexpr GLenum TEXTURE_WRAP_R          = 0x8072;
     inline constexpr GLenum REPEAT                  = 0x2901;
     inline constexpr GLenum CLAMP_TO_EDGE           = 0x812F;
     inline constexpr GLenum MIRRORED_REPEAT         = 0x8370;

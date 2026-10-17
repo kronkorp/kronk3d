@@ -7,6 +7,8 @@
 #include "render/ShadowFit.hpp"
 #include "render/software/Shading.hpp"
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <chrono>
 #include <cstdio>
 #include <iterator>
@@ -25,6 +27,7 @@ namespace
         OPACITY_UNIT  = 2,
         SHADOW_UNIT   = 3,
         NORMAL_UNIT   = 4,
+        SKY_UNIT      = 5,
     };
 
     struct GpuMesh
@@ -184,9 +187,9 @@ namespace
 
 struct k3::HardwareRasterizer::Impl
 {
-    Impl(Program meshProgram, Program shadowProgram, Program ssaaProgram, Program fxaaProgram, Program overlayProgram)
+    Impl(Program meshProgram, Program shadowProgram, Program ssaaProgram, Program fxaaProgram, Program skyProgram, Program overlayProgram)
         : mesh(std::move(meshProgram)), shadow(std::move(shadowProgram)), ssaa(std::move(ssaaProgram)), fxaa(std::move(fxaaProgram)),
-          overlay(std::move(overlayProgram)), meshUniforms(mesh), shadowUniforms(shadow)
+          sky(std::move(skyProgram)), overlay(std::move(overlayProgram)), meshUniforms(mesh), shadowUniforms(shadow)
     {
         GenVertexArrays(1, &fullscreenVao);
     }
@@ -198,6 +201,8 @@ struct k3::HardwareRasterizer::Impl
         for (auto& [_, gpu] : textures)
             DeleteTextures(1, &gpu.id);
         releaseTarget();
+        if (skyTexture)
+            DeleteTextures(1, &skyTexture);
         if (shadowTexture)
             DeleteTextures(1, &shadowTexture);
         if (shadowFbo)
@@ -209,6 +214,7 @@ struct k3::HardwareRasterizer::Impl
     Program        shadow;
     Program        ssaa;
     Program        fxaa;
+    Program        sky;
     Program        overlay;
     MeshUniforms   meshUniforms;
     ShadowUniforms shadowUniforms;
@@ -224,6 +230,10 @@ struct k3::HardwareRasterizer::Impl
     std::uint32_t shadowSize = 0;
     std::size_t shadowLayers = 0;
     std::optional<std::uint32_t> presentFramebuffer = 0u;
+
+    GLuint                                      skyTexture = 0;     // Cube map of environment.skybox
+    std::array<std::weak_ptr<const Texture>, 6> skySources;
+    std::array<std::uint64_t, 6>                skyVersions{};
 
     std::unordered_map<const Mesh*, GpuMesh>       meshes;
     std::unordered_map<const Texture*, GpuTexture> textures;
@@ -714,6 +724,72 @@ struct k3::HardwareRasterizer::Impl
         drawMesh(gpu);
     }
 
+    // Binds the sky cube map on SKY_UNIT (uploading it when the skybox changed); false without a valid skybox.
+    bool bindSky()
+    {
+        const Skybox& skybox = environment.skybox;
+
+        if (!skybox.valid())
+            return false;
+
+        bool stale = skyTexture == 0;
+        for (std::size_t i = 0; i < 6; ++i)
+            stale = stale || skySources[i].lock() != skybox.faces[i] || skyVersions[i] != skybox.faces[i]->version();
+
+        ActiveTexture(TEXTURE0 + SKY_UNIT);
+        if (!skyTexture)
+            GenTextures(1, &skyTexture);
+        BindTexture(TEXTURE_CUBE_MAP, skyTexture);
+        if (stale) {
+            PixelStorei(UNPACK_ALIGNMENT, 1);
+            for (std::size_t i = 0; i < 6; ++i) {
+                const Texture& face = *skybox.faces[i];
+                const GLint format = static_cast<GLint>(face.colorSpace() == ColorSpace::Srgb ? SRGB8_ALPHA8 : RGBA8);
+
+                TexImage2D(TEXTURE_CUBE_MAP_POSITIVE_X + static_cast<GLenum>(i), 0, format, static_cast<GLsizei>(face.width()), static_cast<GLsizei>(face.height()), 0, RGBA, UNSIGNED_BYTE, face.image().pixels.data());
+                skySources[i] = skybox.faces[i];
+                skyVersions[i] = face.version();
+            }
+            TexParameteri(TEXTURE_CUBE_MAP, TEXTURE_WRAP_S, CLAMP_TO_EDGE);
+            TexParameteri(TEXTURE_CUBE_MAP, TEXTURE_WRAP_T, CLAMP_TO_EDGE);
+            TexParameteri(TEXTURE_CUBE_MAP, TEXTURE_WRAP_R, CLAMP_TO_EDGE);
+        }
+        const GLint filter = skybox.faces[0]->sampler.filter == TextureFilter::Linear ? LINEAR : NEAREST;
+
+        TexParameteri(TEXTURE_CUBE_MAP, TEXTURE_MIN_FILTER, filter);
+        TexParameteri(TEXTURE_CUBE_MAP, TEXTURE_MAG_FILTER, filter);
+        return true;
+    }
+
+    // Fills the pixels no opaque geometry covered.
+    void drawSky()
+    {
+        if (!bindSky())
+            return;
+
+        const float* v = view.values;
+        const float tanY = std::tan(camera.fovY * 0.5f);
+        const float aspect = height ? static_cast<float>(width) / static_cast<float>(height) : 1.f;
+
+        DepthFunc(LEQUAL);
+        DepthMask(FALSE_);
+        Disable(BLEND);
+        Disable(CULL_FACE);
+        UseProgram(sky.id());
+        Uniform3f(sky.uniform("uRight"), v[0], v[1], v[2]);
+        Uniform3f(sky.uniform("uUp"), v[4], v[5], v[6]);
+        Uniform3f(sky.uniform("uBack"), v[8], v[9], v[10]);
+        Uniform4f(sky.uniform("uView"), tanY * aspect, tanY, camera.projection == Projection::Orthographic ? 1.f : 0.f, 0.f);
+        Uniform4f(sky.uniform("uViewport"), static_cast<float>(renderWidth), static_cast<float>(renderHeight), 0.f, 0.f);
+        Uniform4f(sky.uniform("uTint"), environment.skybox.tint.r, environment.skybox.tint.g, environment.skybox.tint.b, 1.f);
+        Uniform1i(sky.uniform("uSky"), SKY_UNIT);
+        BindVertexArray(fullscreenVao);
+        DrawArrays(TRIANGLES, 0, 3);
+
+        DepthFunc(LESS);
+        UseProgram(mesh.id());
+    }
+
     void renderMain(std::size_t firstBlended)
     {
         BindFramebuffer(FRAMEBUFFER, fbo);
@@ -742,6 +818,8 @@ struct k3::HardwareRasterizer::Impl
             }
             drawShaded(commands[d]);
         }
+
+        drawSky();
 
         // Blended geometry, farthest first, depth-tested but not written. A double-sided blended mesh
         // draws its back faces first so they end up behind its front faces.
@@ -864,11 +942,14 @@ k3::Result<std::unique_ptr<k3::HardwareRasterizer>> k3::HardwareRasterizer::crea
     if (!fxaa)
         return Error{"OpenGL: FXAA shader: " + fxaa.error()};
 
+    auto sky = gl::Program::create(gl::shaders::SKY_VERTEX, gl::shaders::SKY_FRAGMENT);
+    if (!sky)
+        return Error{"OpenGL: sky shader: " + sky.error()};
     auto overlay = gl::Program::create(gl::shaders::OVERLAY_VERTEX, gl::shaders::OVERLAY_FRAGMENT);
     if (!overlay)
         return Error{"OpenGL: overlay shader: " + overlay.error()};
 
-    auto impl = std::make_unique<Impl>(std::move(*mesh), std::move(*shadow), std::move(*ssaa), std::move(*fxaa), std::move(*overlay));
+    auto impl = std::make_unique<Impl>(std::move(*mesh), std::move(*shadow), std::move(*ssaa), std::move(*fxaa), std::move(*sky), std::move(*overlay));
     impl->driver = std::string(version) + " / " + (renderer ? renderer : "unknown");
     impl->resize(width, height);
     log(LogLevel::Info, "OpenGL rasterizer on {}", impl->driver);

@@ -355,6 +355,38 @@ void main()
 }
 )glsl";
 
+    // Skybox: a full-screen triangle on the far plane, drawn where nothing was (depth test LEQUAL). The
+    // view ray of each pixel is rebuilt from the camera axes; the cube map is read in OpenGL's own addressing,
+    // which the software backend mirrors (render/CubeMap.hpp).
+    inline constexpr const char* SKY_VERTEX = R"glsl(
+#version 330 core
+void main()
+{
+    vec2 position = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    gl_Position = vec4(position * 2.0 - 1.0, 1.0, 1.0);
+}
+)glsl";
+
+    inline constexpr const char* SKY_FRAGMENT = R"glsl(
+#version 330 core
+uniform vec3  uRight;
+uniform vec3  uUp;
+uniform vec3  uBack;
+uniform vec4  uView;        // tan(fov / 2) * aspect, tan(fov / 2), orthographic (0 / 1)
+uniform vec4  uViewport;    // Render target size in xy
+uniform vec4  uTint;
+uniform samplerCube uSky;
+out vec4 fragColor;
+
+void main()
+{
+    vec2 ndc = gl_FragCoord.xy / uViewport.xy * 2.0 - 1.0;
+    vec3 direction = uView.z > 0.5 ? -uBack : uRight * (ndc.x * uView.x) + uUp * (ndc.y * uView.y) - uBack;
+
+    fragColor = vec4(texture(uSky, direction).rgb * uTint.rgb, 1.0);
+}
+)glsl";
+
     // 2D overlay (IRasterizer::draw2D): one rectangle, six vertices from gl_VertexID. The rectangle
     // (x, y, width, height) is in output pixels, y down; uSource is the texture area (u0, v0, u1, v1).
     inline constexpr const char* OVERLAY_VERTEX = R"glsl(

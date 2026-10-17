@@ -5,6 +5,7 @@
 #include "Sampling.hpp"
 #include "Shading.hpp"
 #include "ThreadPool.hpp"
+#include "render/CubeMap.hpp"
 #include "render/Frustum.hpp"
 #include "render/ShadowFit.hpp"
 #include "utils/Srgb.hpp"
@@ -237,6 +238,15 @@ struct k3::SoftwareRasterizer::Impl
     Math::Matrix4      view = Math::Matrix4::identity();
     sw::ShadingContext shading{};
 
+    // The sky behind the geometry: camera axes in world space and the extent of the view plane at distance 1.
+    struct SkyView
+    {
+        bool           active = false;
+        bool           orthographic = false;
+        Math::Vector3f right, up, back;
+        float          tanX = 0.f, tanY = 0.f;
+    } sky;
+
     // Frame data, indexed by draw (position in `commands` once sorted).
     std::vector<DrawCommand>    commands;
     std::vector<Overlay>        overlays;
@@ -286,6 +296,40 @@ struct k3::SoftwareRasterizer::Impl
             sw::downsample2x2(color, outputWidth, outputHeight, output, pool);
         else if (antiAliasing == AntiAliasing::FXAA)
             sw::fxaa(color, outputWidth, outputHeight, output, pool);
+    }
+
+    /* Sky */
+
+    void prepareSky(float aspect)
+    {
+        const Skybox& skybox = environment.skybox;
+        const float* v = view.values;
+
+        sky.active = skybox.valid();
+        sky.orthographic = camera.projection == Projection::Orthographic;
+        sky.right = {v[0], v[1], v[2]};
+        sky.up = {v[4], v[5], v[6]};
+        sky.back = {v[8], v[9], v[10]};
+        sky.tanY = std::tan(camera.fovY * 0.5f);
+        sky.tanX = sky.tanY * aspect;
+    }
+
+    // Color of the sky at a pixel of the render target.
+    [[nodiscard]] Math::Color skyAt(std::int32_t x, std::int32_t y) const
+    {
+        const float nx = (static_cast<float>(x) + 0.5f) / static_cast<float>(mainPass.width) * 2.f - 1.f;
+        const float ny = 1.f - (static_cast<float>(y) + 0.5f) / static_cast<float>(mainPass.height) * 2.f;
+        const Math::Vector3f direction = sky.orthographic ? -1.f * sky.back : (nx * sky.tanX) * sky.right + (ny * sky.tanY) * sky.up - sky.back;
+        const cube::Lookup hit = cube::lookup(direction);
+        const Texture* face = environment.skybox.faces[static_cast<std::size_t>(hit.face)].get();
+
+        // Clamp to the edge texel of the face, like a GL cube map: no wrapping onto the opposite side.
+        const float margin = 0.5f / static_cast<float>(face->width());
+        const float s = std::clamp(hit.s, margin, 1.f - margin), t = std::clamp(hit.t, margin, 1.f - margin);
+        Math::Color c = sw::sampleTexture(face, {s, t}, {0.f, 0.f}, {0.f, 0.f}) * environment.skybox.tint;
+
+        c.a = 1.f;
+        return c;
     }
 
     /* 2D overlay: alpha-blended over the finished frame, in submission order */
@@ -846,8 +890,11 @@ struct k3::SoftwareRasterizer::Impl
                 const std::size_t index = static_cast<std::size_t>(y) * width + x;
                 const sw::Triangle* t = visibility[index];
 
-                if (!t)
+                if (!t) {
+                    if (sky.active)
+                        color[index] = skyAt(x, y);
                     continue;
+                }
 
                 std::int64_t e[3];
                 t->edgesAt(x, y, e);
@@ -933,6 +980,7 @@ void k3::SoftwareRasterizer::beginFrame(const Camera& camera, const Environment&
     impl.view = camera.view();
     impl.mainPass.viewProjection = camera.projectionMatrix(aspect) * impl.view;
     impl.shading = sw::ShadingContext::prepare(camera, environment);
+    impl.prepareSky(aspect);
     impl.commands.clear();
     impl.overlays.clear();
     impl.stats = {};

@@ -21,6 +21,7 @@ Both backends produce the same image: the shading code is mirrored, and tests co
   - **glTF 2.0** loading (`.glb` / `.gltf`, what Blender exports): node hierarchy, skins, animation clips, metallic-roughness materials converted to Blinn-Phong, embedded or external textures.
   - Skeletal animation: translation / rotation / scale channels (step, linear, cubic spline), up to 4 joints per vertex, crossfades between clips.
   - Skinning runs on the CPU and produces plain meshes, so both backends draw animated characters unchanged.
+- **Skybox**: six images (or `Skybox::gradient(zenith, horizon, ground)`, no asset needed) set on `Environment::skybox`, drawn behind the geometry and under transparency. OpenGL cube-map addressing, so common skybox assets work unchanged; identical on both backends.
 - **Lighting**
   - Per-pixel Blinn-Phong, computed in linear space with sRGB output.
   - Normal mapping (tangent space, OpenGL convention), with tangents computed from the uvs.
