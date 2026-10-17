@@ -19,6 +19,20 @@ namespace k3
     // Lights past this count are ignored (fixed-size uniform arrays on the GPU backends).
     inline constexpr std::size_t MAX_LIGHTS = 8;
 
+    // Exponential height fog, integrated along each view ray: the density thins out with altitude, so
+    // the fog pools in low ground and the view through it is right wherever the camera is, inside the
+    // layer or above it. A surface at distance d (straight, with no height difference) keeps
+    // e^(-density * d) of its color; the rest is `color`. Everything drawn is fogged, transparent
+    // surfaces and unlit materials included; the background (clear color or sky) is not, so give `color`
+    // the horizon's color for distant geometry to melt into it. It is not light scattering: no light shafts.
+    struct Fog
+    {
+        Math::Color color         = {0.7f, 0.75f, 0.8f, 1.f};   // Linear
+        float       density       = 0.f;    // Per world unit, at baseHeight; 0 turns the fog off
+        float       heightFalloff = 0.f;    // Density is divided by e per 1 / heightFalloff units of altitude; 0: uniform fog
+        float       baseHeight    = 0.f;    // Altitude where the density is `density`
+    };
+
     // Shadows come from the first directional light with castShadows set, through cascaded shadow
     // maps: the camera's view range is split into `cascades` slices, each with its own orthographic
     // shadow map looking along the light, so nearby shadows get most of the resolution.
@@ -38,6 +52,7 @@ namespace k3
     struct Environment
     {
         Math::Color        clearColor = {0.02f, 0.02f, 0.025f, 1.f};
+        Fog                fog{};
         Math::Color        ambient    = {0.1f, 0.1f, 0.1f, 1.f};      // Multiplied by the surface albedo
         std::vector<Light> lights{};
         ShadowSettings     shadows{};

@@ -62,6 +62,19 @@ namespace k3::sw
         Math::Vector3f cameraPosition{}, cameraForward{};   // To measure view distances
     };
 
+    // Fog of the frame, with the density already brought to the camera's altitude.
+    struct FogState
+    {
+        bool        enabled = false;
+        Math::Color color{};
+        float       density = 0.f;      // At the camera's altitude
+        float       falloff = 0.f;      // Per unit of altitude
+    };
+
+    // Fraction of a surface's color that survives the fog between the camera and `position`, in [0, 1]:
+    // exp(-integral of the density along the ray). The OpenGL fragment shader mirrors this.
+    float fogVisibility(const FogState& fog, const Math::Vector3f& cameraPosition, const Math::Vector3f& position) noexcept;
+
     // Per-frame data every fragment needs, prepared once in beginFrame().
     struct ShadingContext
     {
@@ -69,6 +82,7 @@ namespace k3::sw
         Math::Vector3f viewDirection{};     // Orthographic cameras: the view vector is the same everywhere
         bool           orthographic = false;
         Math::Color    ambient{};
+        FogState       fog{};
         PreparedLight  lights[MAX_LIGHTS]{};
         std::size_t    lightCount = 0;
         int            shadowLight = -1;    // Index in `lights` of the light the shadow map belongs to

@@ -20,6 +20,7 @@ Both backends produce the same image: the shading code is mirrored, and tests co
   - **glTF 2.0** loading (`.glb` / `.gltf`, what Blender exports): node hierarchy, skins, animation clips, metallic-roughness materials converted to Blinn-Phong, embedded or external textures.
   - Skeletal animation: translation / rotation / scale channels (step, linear, cubic spline), up to 4 joints per vertex, crossfades between clips.
   - Skinning runs on the CPU and produces plain meshes, so both backends draw animated characters unchanged.
+- **Fog**: `Environment::fog`, exponential height fog integrated along each view ray (it pools in low ground and is right with the camera inside it or above); applies to every surface, transparent and unlit ones included. Identical on both backends.
 - **Lighting**
   - Per-pixel Blinn-Phong, computed in linear space with sRGB output.
   - Normal mapping (tangent space, OpenGL convention), with tangents computed from the uvs.
