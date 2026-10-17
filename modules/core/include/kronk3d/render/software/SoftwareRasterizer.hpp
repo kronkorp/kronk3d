@@ -42,6 +42,7 @@ namespace k3
             void beginFrame(const Camera& camera, const Environment& environment) override;
             using IRasterizer::draw;
             void draw(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material> material, const Math::Matrix4& transform) override;
+            void draw2D(std::shared_ptr<Texture> texture, const Rect& destination, const Rect& source, const Math::Color& tint) override;
             void endFrame() override;
 
             [[nodiscard]] Image readPixels() override;
