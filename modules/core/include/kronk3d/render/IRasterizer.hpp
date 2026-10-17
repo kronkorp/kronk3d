@@ -70,6 +70,7 @@ namespace k3
         unsigned      threads = 0;          // Software: worker threads, 0 = one per hardware thread
         GLLoader      glLoader{};           // OpenGL: required, and the context must be current
         AntiAliasing  antiAliasing = AntiAliasing::None;
+        float         renderScale = 1.f;    // See IRasterizer::setRenderScale
     };
 
     // A frame is:
@@ -96,6 +97,13 @@ namespace k3
 
             virtual void setAntiAliasing(AntiAliasing mode) = 0;
             [[nodiscard]] virtual AntiAliasing antiAliasing() const noexcept = 0;
+
+            // Renders the scene (layers, debug lines) at `scale` times the output size, then enlarges it to the
+            // output size with no filtering: big square pixels, for a low-resolution look or to save fill rate.
+            // The 2D overlay stays at full resolution, and width() / height() stay the output size. Anti-aliasing
+            // works at the low resolution (leave it off for crisp pixels). Clamped to [0.05, 1].
+            virtual void setRenderScale(float scale) = 0;
+            [[nodiscard]] virtual float renderScale() const noexcept = 0;
 
             virtual void beginFrame(const Camera& camera, const Environment& environment) = 0;
 
