@@ -64,6 +64,8 @@ k3::sw::ShadingContext k3::sw::ShadingContext::prepare(const Camera& camera, con
     context.viewDirection = -camera.forward();
     context.orthographic = camera.projection == Projection::Orthographic;
     context.ambient = environment.ambient;
+    context.hemisphere = environment.ambientGround.has_value();
+    context.ambientGround = environment.ambientGround.value_or(environment.ambient);
 
     const Fog& fog = environment.fog;
     if (fog.density > 0.f) {
@@ -179,7 +181,14 @@ k3::Math::Color k3::sw::shade(const ShadingContext& context, const Material& mat
     const bool hasSpecular = specular.r > 0.f || specular.g > 0.f || specular.b > 0.f;
     const float shininess = std::max(material.shininess, 1.f);
 
-    Math::Color result = context.ambient * albedo + material.emissive;
+    // Hemisphere light: the ambient color slides from the ground's to the sky's with the normal's height.
+    Math::Color ambient = context.ambient;
+    if (context.hemisphere) {
+        const float up = n.y * 0.5f + 0.5f;
+
+        ambient = context.ambientGround + (context.ambient - context.ambientGround) * up;
+    }
+    Math::Color result = ambient * albedo + material.emissive;
 
     for (std::size_t i = 0; i < context.lightCount; ++i) {
         const PreparedLight& light = context.lights[i];

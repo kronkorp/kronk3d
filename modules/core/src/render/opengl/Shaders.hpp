@@ -71,6 +71,7 @@ uniform vec3  uCameraPosition;
 uniform vec3  uViewDirection;
 uniform bool  uOrthographic;
 uniform vec3  uAmbient;
+uniform vec4  uAmbientGround;   // rgb, and a = 1 for a hemisphere light (ambient above, this below)
 uniform vec4  uFogColor;    // rgb, and a = 1 when the fog is on
 uniform vec4  uFog;         // x: density at the camera's altitude, y: height falloff
 uniform int   uLightCount;
@@ -203,7 +204,11 @@ void main()
     bool hasSpecular = specular.r > 0.0 || specular.g > 0.0 || specular.b > 0.0;
     float shininess = max(uShininess, 1.0);
 
-    vec3 result = uAmbient * albedo.rgb + uEmissive;
+    // Hemisphere light: the ambient color slides from the ground's to the sky's with the normal's height.
+    vec3 ambient = uAmbient;
+    if (uAmbientGround.a > 0.5)
+        ambient = mix(uAmbientGround.rgb, uAmbient, n.y * 0.5 + 0.5);
+    vec3 result = ambient * albedo.rgb + uEmissive;
 
     for (int i = 0; i < uLightCount; ++i) {
         vec3 l = uLightToLight[i];
@@ -435,6 +440,35 @@ uniform vec4 uTint;
 void main()
 {
     fragColor = uHasImage != 0 ? texture(uImage, vUV) * uTint : uTint;
+}
+)glsl";
+
+    // Debug lines (IRasterizer::drawLines): world-space segments with a color per vertex. The depth is
+    // pulled slightly toward the camera so that lines lying on a surface (the edges of a box) win against it.
+    inline constexpr const char* LINE_VERTEX = R"glsl(
+#version 330 core
+layout(location = 0) in vec3 aPosition;
+layout(location = 1) in vec4 aColor;
+
+uniform mat4 uViewProjection;
+out vec4 vColor;
+
+void main()
+{
+    vColor = aColor;
+    gl_Position = uViewProjection * vec4(aPosition, 1.0);
+    gl_Position.z -= 1e-4 * gl_Position.w;
+}
+)glsl";
+
+    inline constexpr const char* LINE_FRAGMENT = R"glsl(
+#version 330 core
+in vec4 vColor;
+out vec4 fragColor;
+
+void main()
+{
+    fragColor = vColor;
 }
 )glsl";
 

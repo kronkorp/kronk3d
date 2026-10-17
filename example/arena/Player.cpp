@@ -185,3 +185,11 @@ void Player::draw(k3::IRasterizer& rasterizer)
 
     m_animator.draw(rasterizer, placement);
 }
+
+void Player::toggleFlatShading()
+{
+    for (const auto& primitive : m_model->primitives) {
+        if (primitive.material)
+            primitive.material->flatShading = !primitive.material->flatShading;
+    }
+}

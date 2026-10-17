@@ -43,10 +43,14 @@ namespace k3
 
             void setAntiAliasing(AntiAliasing mode) override;
             [[nodiscard]] AntiAliasing antiAliasing() const noexcept override;
+            void setRenderScale(float scale) override;
+            [[nodiscard]] float renderScale() const noexcept override;
 
             void beginFrame(const Camera& camera, const Environment& environment) override;
+            void beginLayer(const Camera& camera) override;
             using IRasterizer::draw;
             void draw(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material> material, const Math::Matrix4& transform) override;
+            void drawLines(std::span<const DebugLine> lines, bool depthTested) override;
             void draw2D(std::shared_ptr<Texture> texture, const Rect& destination, const Rect& source, const Math::Color& tint) override;
             void endFrame() override;
 

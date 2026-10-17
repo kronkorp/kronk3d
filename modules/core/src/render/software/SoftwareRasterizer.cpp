@@ -226,6 +226,9 @@ struct k3::SoftwareRasterizer::Impl
 
     AntiAliasing                      antiAliasing = AntiAliasing::None;
     std::uint32_t                     outputWidth = 0, outputHeight = 0;
+    float                             renderScale = 1.f;
+    std::uint32_t                     sceneWidth = 0, sceneHeight = 0;      // What the scene renders at (before supersampling)
+    std::vector<Math::Color>          upscaled;         // The output frame, when the scene renders smaller than it
     std::vector<Math::Color>          output;           // Anti-aliased frame (color is the frame itself without AA)
     std::vector<Math::Color>          color;            // Render resolution (twice the output's with SSAA)
     std::vector<float>                depth;
@@ -250,6 +253,16 @@ struct k3::SoftwareRasterizer::Impl
     // Frame data, indexed by draw (position in `commands` once sorted).
     std::vector<DrawCommand>    commands;
     std::vector<Overlay>        overlays;
+    struct Line
+    {
+        DebugLine   line;
+        bool        depthTested;
+        std::size_t layer;
+    };
+    std::vector<Line>           lines;              // Debug lines, drawn after the geometry of their layer
+    std::vector<Camera>         layerCameras;       // Of each layer, the frame's own first
+    std::vector<std::size_t>    layerStarts;        // Index in `commands` where each layer's draws begin
+    bool                        clearBackground = true;     // Only the first layer starts from the clear color / the sky
     std::vector<sw::DrawState>  drawStates;
     std::vector<DrawTransforms> transforms;
 
@@ -271,31 +284,143 @@ struct k3::SoftwareRasterizer::Impl
 
     FrameStats stats{};
 
+    [[nodiscard]] bool scaled() const noexcept
+    {
+        return sceneWidth != outputWidth || sceneHeight != outputHeight;
+    }
+
     void resize(std::uint32_t w, std::uint32_t h)
     {
         const std::uint32_t scale = antiAliasing == AntiAliasing::SSAA ? 2 : 1;
-        const std::size_t renderPixels = static_cast<std::size_t>(w) * scale * h * scale;
 
         outputWidth = w;
         outputHeight = h;
-        mainPass.setSize(w * scale, h * scale);
+        sceneWidth = w ? std::max<std::uint32_t>(1, static_cast<std::uint32_t>(std::lround(static_cast<float>(w) * renderScale))) : 0;
+        sceneHeight = h ? std::max<std::uint32_t>(1, static_cast<std::uint32_t>(std::lround(static_cast<float>(h) * renderScale))) : 0;
+
+        const std::size_t renderPixels = static_cast<std::size_t>(sceneWidth) * scale * sceneHeight * scale;
+
+        mainPass.setSize(sceneWidth * scale, sceneHeight * scale);
         color.assign(renderPixels, Math::Color::Black);
         depth.assign(renderPixels, 1.f);
         visibility.assign(renderPixels, nullptr);
-        output.assign(antiAliasing == AntiAliasing::None ? 0 : static_cast<std::size_t>(w) * h, Math::Color::Black);
+        output.assign(antiAliasing == AntiAliasing::None ? 0 : static_cast<std::size_t>(sceneWidth) * sceneHeight, Math::Color::Black);
+        upscaled.assign(scaled() ? static_cast<std::size_t>(w) * h : 0, Math::Color::Black);
     }
 
     [[nodiscard]] const std::vector<Math::Color>& finalColor() const noexcept
     {
-        return antiAliasing == AntiAliasing::None ? color : output;
+        return scaled() ? upscaled : antiAliasing == AntiAliasing::None ? color : output;
     }
 
+    // The frame at the scene's size: the render itself, or its anti-aliased version.
     void antiAlias()
     {
         if (antiAliasing == AntiAliasing::SSAA)
-            sw::downsample2x2(color, outputWidth, outputHeight, output, pool);
+            sw::downsample2x2(color, sceneWidth, sceneHeight, output, pool);
         else if (antiAliasing == AntiAliasing::FXAA)
-            sw::fxaa(color, outputWidth, outputHeight, output, pool);
+            sw::fxaa(color, sceneWidth, sceneHeight, output, pool);
+    }
+
+    // Enlarges the frame to the output size without filtering (each output pixel reads the scene pixel it falls in).
+    void upscale()
+    {
+        if (!scaled())
+            return;
+
+        const std::vector<Math::Color>& source = antiAliasing == AntiAliasing::None ? color : output;
+
+        pool.parallelFor(outputHeight, [&](std::size_t y) {
+            const std::size_t sourceRow = (2 * y + 1) * sceneHeight / (2 * static_cast<std::size_t>(outputHeight));
+
+            for (std::size_t x = 0; x < outputWidth; ++x)
+                upscaled[y * outputWidth + x] = source[sourceRow * sceneWidth + (2 * x + 1) * sceneWidth / (2 * static_cast<std::size_t>(outputWidth))];
+        });
+    }
+
+    // What the 2D overlay is drawn on.
+    [[nodiscard]] std::vector<Math::Color>& finalFrame() noexcept
+    {
+        return scaled() ? upscaled : antiAliasing == AntiAliasing::None ? color : output;
+    }
+
+    // Looks through `layerCamera`: view, projection and what depends on them.
+    void useCamera(const Camera& layerCamera)
+    {
+        const float aspect = outputHeight ? static_cast<float>(outputWidth) / static_cast<float>(outputHeight) : 1.f;
+
+        camera = layerCamera;
+        view = layerCamera.view();
+        mainPass.viewProjection = layerCamera.projectionMatrix(aspect) * view;
+    }
+
+    /* Debug lines: one pixel wide, drawn over the layer's geometry */
+
+    // Clips the segment to the view volume in clip space; false when nothing is left.
+    static bool clipSegment(Math::Vector4f& a, Math::Vector4f& b) noexcept
+    {
+        float t0 = 0.f, t1 = 1.f;
+
+        for (int plane = 0; plane < 6; ++plane) {
+            const float sign = (plane & 1) ? -1.f : 1.f;        // w + c >= 0, then w - c >= 0
+            const auto coordinate = [&](const Math::Vector4f& p) { return plane < 2 ? p.x : plane < 4 ? p.y : p.z; };
+            const float da = a.w + sign * coordinate(a), db = b.w + sign * coordinate(b);
+
+            if (da < 0.f && db < 0.f)
+                return false;
+            if (da < 0.f)
+                t0 = std::max(t0, da / (da - db));
+            else if (db < 0.f)
+                t1 = std::min(t1, da / (da - db));
+        }
+        if (t0 > t1)
+            return false;
+
+        const Math::Vector4f from = a, direction = b - a;
+
+        a = from + t0 * direction;
+        b = from + t1 * direction;
+        return true;
+    }
+
+    void drawLines(std::size_t layer)
+    {
+        constexpr float DEPTH_BIAS = 5e-5f;     // Lines on a surface (the edges of a box) win against it
+        const auto width = static_cast<float>(mainPass.width), height = static_cast<float>(mainPass.height);
+
+        for (const Line& entry : lines) {
+            if (entry.layer != layer)
+                continue;
+
+            Math::Vector4f a = mainPass.viewProjection * Math::Vector4f{entry.line.from.x, entry.line.from.y, entry.line.from.z, 1.f};
+            Math::Vector4f b = mainPass.viewProjection * Math::Vector4f{entry.line.to.x, entry.line.to.y, entry.line.to.z, 1.f};
+
+            if (!clipSegment(a, b))
+                continue;
+
+            // To pixels (y down) and depth in [0, 1].
+            const float x0 = (a.x / a.w * 0.5f + 0.5f) * width, y0 = (0.5f - a.y / a.w * 0.5f) * height, z0 = a.z / a.w * 0.5f + 0.5f;
+            const float x1 = (b.x / b.w * 0.5f + 0.5f) * width, y1 = (0.5f - b.y / b.w * 0.5f) * height, z1 = b.z / b.w * 0.5f + 0.5f;
+            const float steps = std::ceil(std::max(std::abs(x1 - x0), std::abs(y1 - y0)));
+            const Math::Color& c = entry.line.color;
+
+            for (float i = 0.f; i < steps; i += 1.f) {
+                const float t = i / steps;
+                const auto x = static_cast<std::int32_t>(std::floor(x0 + (x1 - x0) * t));
+                const auto y = static_cast<std::int32_t>(std::floor(y0 + (y1 - y0) * t));
+
+                if (x < 0 || y < 0 || x >= static_cast<std::int32_t>(mainPass.width) || y >= static_cast<std::int32_t>(mainPass.height))
+                    continue;
+
+                const std::size_t index = static_cast<std::size_t>(y) * mainPass.width + static_cast<std::size_t>(x);
+
+                if (entry.depthTested && z0 + (z1 - z0) * t - DEPTH_BIAS > depth[index])
+                    continue;
+                Math::Color& target = color[index];
+
+                target = {c.r * c.a + target.r * (1.f - c.a), c.g * c.a + target.g * (1.f - c.a), c.b * c.a + target.b * (1.f - c.a), c.a + target.a * (1.f - c.a)};
+            }
+        }
     }
 
     /* Sky */
@@ -336,7 +461,7 @@ struct k3::SoftwareRasterizer::Impl
 
     void drawOverlays()
     {
-        std::vector<Math::Color>& frame = antiAliasing == AntiAliasing::None ? color : output;
+        std::vector<Math::Color>& frame = finalFrame();
         const auto width = static_cast<int>(outputWidth), height = static_cast<int>(outputHeight);
 
         for (const Overlay& overlay : overlays) {
@@ -391,7 +516,7 @@ struct k3::SoftwareRasterizer::Impl
             const Material& material = command.material ? *command.material : defaultMaterial();
 
             const bool normalMapped = material.normalMap && mesh.hasNormals() && mesh.hasUVs() && mesh.hasTangents();
-            drawStates.push_back({&material, material.alphaMode == AlphaMode::Mask, mesh.hasNormals(), mesh.hasColors(), normalMapped});
+            drawStates.push_back({&material, material.alphaMode == AlphaMode::Mask, mesh.hasNormals() && !material.flatShading, mesh.hasColors(), normalMapped});
             transforms.push_back({command.transform, command.transform.normalMatrix(), handedness(command.transform)});
         }
     }
@@ -859,7 +984,8 @@ struct k3::SoftwareRasterizer::Impl
         const std::uint32_t width = mainPass.width;
         for (std::int32_t y = y0; y <= y1; ++y) {
             const std::size_t row = static_cast<std::size_t>(y) * width;
-            std::fill(color.begin() + row + x0, color.begin() + row + x1 + 1, environment.clearColor);
+            if (clearBackground)
+                std::fill(color.begin() + row + x0, color.begin() + row + x1 + 1, environment.clearColor);
             std::fill(depth.begin() + row + x0, depth.begin() + row + x1 + 1, 1.f);
             std::fill(visibility.begin() + row + x0, visibility.begin() + row + x1 + 1, nullptr);
         }
@@ -952,6 +1078,20 @@ std::uint32_t k3::SoftwareRasterizer::height() const noexcept
     return m_impl->outputHeight;
 }
 
+void k3::SoftwareRasterizer::setRenderScale(float scale)
+{
+    scale = std::clamp(scale, 0.05f, 1.f);
+    if (scale == m_impl->renderScale)
+        return;
+    m_impl->renderScale = scale;
+    m_impl->resize(m_impl->outputWidth, m_impl->outputHeight);
+}
+
+float k3::SoftwareRasterizer::renderScale() const noexcept
+{
+    return m_impl->renderScale;
+}
+
 void k3::SoftwareRasterizer::setAntiAliasing(AntiAliasing mode)
 {
     if (mode == m_impl->antiAliasing)
@@ -975,15 +1115,22 @@ void k3::SoftwareRasterizer::beginFrame(const Camera& camera, const Environment&
     auto& impl = *m_impl;
     const float aspect = impl.outputHeight ? static_cast<float>(impl.outputWidth) / impl.outputHeight : 1.f;
 
-    impl.camera = camera;
     impl.environment = environment;
-    impl.view = camera.view();
-    impl.mainPass.viewProjection = camera.projectionMatrix(aspect) * impl.view;
+    impl.useCamera(camera);
     impl.shading = sw::ShadingContext::prepare(camera, environment);
     impl.prepareSky(aspect);
+    impl.layerCameras = {camera};
+    impl.layerStarts = {0};
     impl.commands.clear();
+    impl.lines.clear();
     impl.overlays.clear();
     impl.stats = {};
+}
+
+void k3::SoftwareRasterizer::beginLayer(const Camera& camera)
+{
+    m_impl->layerCameras.push_back(camera);
+    m_impl->layerStarts.push_back(m_impl->commands.size());
 }
 
 void k3::SoftwareRasterizer::draw(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material> material, const Math::Matrix4& transform)
@@ -995,6 +1142,12 @@ void k3::SoftwareRasterizer::draw(std::shared_ptr<const Mesh> mesh, std::shared_
     m_impl->commands.push_back({std::move(mesh), std::move(material), transform});
 }
 
+void k3::SoftwareRasterizer::drawLines(std::span<const DebugLine> lines, bool depthTested)
+{
+    for (const DebugLine& line : lines)
+        m_impl->lines.push_back({line, depthTested, m_impl->layerStarts.size() - 1});
+}
+
 void k3::SoftwareRasterizer::draw2D(std::shared_ptr<Texture> texture, const Rect& destination, const Rect& source, const Math::Color& tint)
 {
     m_impl->overlays.push_back({std::move(texture), destination, source, tint});
@@ -1004,29 +1157,53 @@ void k3::SoftwareRasterizer::endFrame()
 {
     auto& impl = *m_impl;
     const auto start = std::chrono::steady_clock::now();
+    std::vector<DrawCommand> recorded = std::move(impl.commands);
 
-    impl.computeBounds();
+    // Each layer goes through the whole pipeline in turn, over the colors of the previous one. Only the first
+    // renders the shadow maps (from its own draws) and shows the sky; the others look through their own
+    // camera, with a depth buffer of their own.
+    for (std::size_t layer = 0; layer < impl.layerStarts.size(); ++layer) {
+        const std::size_t first = impl.layerStarts[layer];
+        const std::size_t last = layer + 1 < impl.layerStarts.size() ? impl.layerStarts[layer + 1] : recorded.size();
 
-    // Opaque and alpha-tested draws keep their order, blended ones go last, farthest first.
-    const auto firstBlended = std::stable_partition(impl.commands.begin(), impl.commands.end(), [](const DrawCommand& c) { return !isBlended(c); });
-    for (auto it = firstBlended; it != impl.commands.end(); ++it)
-        it->viewDepth = -impl.view.transformPoint(it->bounds.center()).z;
-    std::stable_sort(firstBlended, impl.commands.end(), [](const DrawCommand& a, const DrawCommand& b) { return a.viewDepth > b.viewDepth; });
+        impl.commands.assign(std::make_move_iterator(recorded.begin() + static_cast<std::ptrdiff_t>(first)), std::make_move_iterator(recorded.begin() + static_cast<std::ptrdiff_t>(last)));
+        if (layer > 0) {
+            sw::ShadowMap shadow = std::move(impl.shading.shadow);
 
-    const auto blendedStart = static_cast<std::size_t>(firstBlended - impl.commands.begin());
+            impl.useCamera(impl.layerCameras[layer]);
+            impl.shading = sw::ShadingContext::prepare(impl.camera, impl.environment);
+            impl.shading.shadow = std::move(shadow);
+            impl.sky.active = false;
+            impl.clearBackground = false;
+        }
+        impl.computeBounds();
 
-    impl.prepareDraws();
-    impl.renderShadows(blendedStart);
-    impl.planMainPass(blendedStart);
-    impl.runGeometry(impl.mainPass);
-    impl.pool.parallelFor(impl.mainPass.tileCount(), [&](std::size_t tile) { impl.renderTile(tile); });
+        // Opaque and alpha-tested draws keep their order, blended ones go last, farthest first.
+        const auto firstBlended = std::stable_partition(impl.commands.begin(), impl.commands.end(), [](const DrawCommand& c) { return !isBlended(c); });
+        for (auto it = firstBlended; it != impl.commands.end(); ++it)
+            it->viewDepth = -impl.view.transformPoint(it->bounds.center()).z;
+        std::stable_sort(firstBlended, impl.commands.end(), [](const DrawCommand& a, const DrawCommand& b) { return a.viewDepth > b.viewDepth; });
+
+        const auto blendedStart = static_cast<std::size_t>(firstBlended - impl.commands.begin());
+
+        impl.prepareDraws();
+        if (layer == 0)
+            impl.renderShadows(blendedStart);
+        impl.planMainPass(blendedStart);
+        impl.runGeometry(impl.mainPass);
+        impl.pool.parallelFor(impl.mainPass.tileCount(), [&](std::size_t tile) { impl.renderTile(tile); });
+        impl.drawLines(layer);
+    }
     impl.antiAlias();
+    impl.upscale();
     impl.drawOverlays();
 
     // Draw states point into the recorded materials: drop both together.
     impl.drawStates.clear();
     impl.commands.clear();
+    impl.lines.clear();
     impl.overlays.clear();
+    impl.clearBackground = true;
     impl.shading.shadow = sw::ShadowMap{};
     impl.collectBounds();
     impl.stats.frameMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();

@@ -12,6 +12,7 @@
 #include <kronk3d/scene/Light.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace k3
@@ -56,6 +57,9 @@ namespace k3
         Fog                fog{};
         Skybox             skybox{};                                  // When valid(), drawn instead of clearColor behind the geometry
         Math::Color        ambient    = {0.1f, 0.1f, 0.1f, 1.f};      // Multiplied by the surface albedo
+        // Hemisphere light: when set, the ambient light goes from `ambient` for surfaces facing up to this
+        // color for surfaces facing down (a sky above, a floor below), with their normal's height in between.
+        std::optional<Math::Color> ambientGround{};
         std::vector<Light> lights{};
         ShadowSettings     shadows{};
     };

@@ -6,6 +6,7 @@
 */
 #pragma once
 
+#include <kronk3d/math/Bounds.hpp>
 #include <kronk3d/math/Color.hpp>
 #include <kronk3d/math/Matrix.hpp>
 #include <kronk3d/render/Environment.hpp>
@@ -19,6 +20,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <span>
 #include <string_view>
 
 namespace k3
@@ -42,6 +44,13 @@ namespace k3
         float x = 0.f, y = 0.f, width = 0.f, height = 0.f;
     };
 
+    // A line segment in world space, for debugging (see IRasterizer::drawLines).
+    struct DebugLine
+    {
+        Math::Vector3f from, to;
+        Math::Color    color = Math::Color::White;      // Alpha blends the line over the frame
+    };
+
     struct FrameStats
     {
         std::size_t drawCalls = 0;
@@ -61,6 +70,7 @@ namespace k3
         unsigned      threads = 0;          // Software: worker threads, 0 = one per hardware thread
         GLLoader      glLoader{};           // OpenGL: required, and the context must be current
         AntiAliasing  antiAliasing = AntiAliasing::None;
+        float         renderScale = 1.f;    // See IRasterizer::setRenderScale
     };
 
     // A frame is:
@@ -88,13 +98,39 @@ namespace k3
             virtual void setAntiAliasing(AntiAliasing mode) = 0;
             [[nodiscard]] virtual AntiAliasing antiAliasing() const noexcept = 0;
 
+            // Renders the scene (layers, debug lines) at `scale` times the output size, then enlarges it to the
+            // output size with no filtering: big square pixels, for a low-resolution look or to save fill rate.
+            // The 2D overlay stays at full resolution, and width() / height() stay the output size. Anti-aliasing
+            // works at the low resolution (leave it off for crisp pixels). Clamped to [0.05, 1].
+            virtual void setRenderScale(float scale) = 0;
+            [[nodiscard]] virtual float renderScale() const noexcept = 0;
+
             virtual void beginFrame(const Camera& camera, const Environment& environment) = 0;
+
+            // Starts a layer: what is drawn from now on goes over everything recorded before, seen by `camera`
+            // with a cleared depth buffer, so it never goes through the scene. For a first-person weapon:
+            // the player's camera with another `fovY` and `nearPlane`, the weapon placed in the world in front
+            // of it. The layer shares the frame's environment: the lights (in world space), the fog, and the
+            // shadows, which it receives but does not cast. The skybox only shows behind the first layer.
+            // Layers can be stacked; a layer's draws are culled with its own camera.
+            virtual void beginLayer(const Camera& camera) = 0;
 
             // A null material draws with a default (white, lit) one.
             virtual void draw(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material> material, const Math::Matrix4& transform) = 0;
 
             // Draws every primitive of the model with the same transform.
             void draw(const Model& model, const Math::Matrix4& transform = Math::Matrix4::identity());
+
+            // Debug lines (colliders, rays, paths), recorded like draw() and drawn by endFrame() in the current
+            // layer, after its geometry. They are one pixel of the render target wide (so thinner with SSAA)
+            // and the last pixel of a segment is not drawn, as in OpenGL. `depthTested`: hidden by the opaque
+            // geometry in front of them, or always visible.
+            virtual void drawLines(std::span<const DebugLine> lines, bool depthTested) = 0;
+
+            void drawLine(const Math::Vector3f& from, const Math::Vector3f& to, const Math::Color& color, bool depthTested = true);
+
+            // The 12 edges of the box, placed by `transform`.
+            void drawBounds(const Math::Bounds3f& bounds, const Math::Color& color, const Math::Matrix4& transform = Math::Matrix4::identity(), bool depthTested = true);
 
             // 2D overlay (HUD, menus): recorded like draw(), then rendered by endFrame() over the finished 3D
             // frame, after anti-aliasing so it stays sharp, in submission order. It is alpha-blended in linear
