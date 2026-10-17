@@ -6,7 +6,7 @@ include(CMakePackageConfigHelpers)
 
 set(K3_CMAKE_DIR ${CMAKE_INSTALL_LIBDIR}/cmake/kronk3d)
 
-install(TARGETS kronk3d_shared kronk3d_static math logger KRONK3D_OPTIONS
+install(TARGETS kronk3d_shared kronk3d_static kronk3d_math kronk3d_logger KRONK3D_OPTIONS
     EXPORT kronk3dTargets
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}

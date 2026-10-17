@@ -16,7 +16,6 @@ if (K3_BUILD_EXAMPLES OR K3_BUILD_GL_TESTS OR K3_BUILD_TOOLS)
 endif()
 
 add_subdirectory(modules/math)
-add_subdirectory(modules/api)
 add_subdirectory(modules/logger)
 add_subdirectory(modules/core)
 
