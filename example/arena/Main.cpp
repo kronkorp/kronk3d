@@ -1,10 +1,11 @@
 // Third-person showcase of the renderer: a robot you drive around an arena.
 //     kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night]
-//                   [--scale 0.05-1] [--screenshot file.png [--seconds S]]
-//                   [--bounds] [--flat]
+//                   [--scale 0.05-1] [--tone none|reinhard|aces] [--flat] [--bounds] [--first-person]
+//                   [--screenshot file.png [--seconds S]]
 //
 // ZQSD / WASD: move (relative to the camera)    Shift: run     Space: jump
-// Mouse / arrows: camera     T: time of day    F: fog    V: anti-aliasing    H: HUD    B: collision boxes
+// Mouse / arrows: camera     C: first person (weapon layer)    T: time of day    F: fog    V: anti-aliasing
+// R: resolution    M: tone mapping    G: flat-shaded robot    B: collision boxes    H: HUD
 // Escape: quit
 //
 // With --screenshot the character is driven by a short script, the frame is saved and the program quits
@@ -25,6 +26,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #ifndef K3_EXAMPLE_ASSETS_DIR
     #define K3_EXAMPLE_ASSETS_DIR "example/assets"
@@ -45,9 +47,11 @@ namespace
         k3::Backend      backend = k3::Backend::OpenGL;
         k3::AntiAliasing antiAliasing = k3::AntiAliasing::FXAA;
         std::size_t      timeOfDay = 0;
-        bool             flatRobot = false;
-        float            renderScale = 1.f;
         bool             bounds = false;        // Draw the collision boxes (debug lines)
+        float            renderScale = 1.f;
+        bool             flatRobot = false;
+        bool             firstPerson = false;
+        k3::ToneMapping  toneMapping = k3::ToneMapping::None;
         std::string      screenshot{};
         float            seconds = 3.f;
     };
@@ -113,12 +117,24 @@ namespace
                 if (found == TIMES.end())
                     return std::nullopt;
                 options.timeOfDay = static_cast<std::size_t>(found - TIMES.begin());
-            } else if (arg == "--flat") {
-                options.flatRobot = true;
-            } else if (arg == "--scale" && hasValue) {
-                options.renderScale = static_cast<float>(std::atof(argv[++i]));
             } else if (arg == "--bounds") {
                 options.bounds = true;
+            } else if (arg == "--scale" && hasValue) {
+                options.renderScale = static_cast<float>(std::atof(argv[++i]));
+            } else if (arg == "--first-person") {
+                options.firstPerson = true;
+            } else if (arg == "--flat") {
+                options.flatRobot = true;
+            } else if (arg == "--tone" && hasValue) {
+                const std::string_view value = argv[++i];
+                if (value == "none")
+                    options.toneMapping = k3::ToneMapping::None;
+                else if (value == "reinhard")
+                    options.toneMapping = k3::ToneMapping::Reinhard;
+                else if (value == "aces")
+                    options.toneMapping = k3::ToneMapping::ACES;
+                else
+                    return std::nullopt;
             } else if (arg == "--screenshot" && hasValue) {
                 options.screenshot = argv[++i];
             } else if (arg == "--seconds" && hasValue) {
@@ -138,6 +154,25 @@ namespace
             World(Level level, Player player, std::size_t timeOfDay, bool lighterShadows)
                 : m_level(std::move(level)), m_player(std::move(player)), m_lighterShadows(lighterShadows)
             {
+                // A small blaster: a body, a barrel, a grip and a glowing tip.
+                auto metal = std::make_shared<k3::Material>();
+                metal->diffuse = {0.32f, 0.35f, 0.4f, 1.f};
+                metal->specular = {0.8f, 0.8f, 0.85f, 1.f};
+                metal->shininess = 80.f;
+                metal->castShadows = false;
+                auto dark = std::make_shared<k3::Material>(*metal);
+                dark->diffuse = {0.12f, 0.12f, 0.14f, 1.f};
+                auto glowing = std::make_shared<k3::Material>();
+                glowing->diffuse = {0.3f, 0.9f, 1.f, 1.f};
+                glowing->unlit = true;
+                glowing->castShadows = false;
+                m_weapon = {
+                    {Level::boxMesh({-0.04f, -0.05f, -0.45f}, {0.04f, 0.03f, -0.05f}, 1.f), metal},
+                    {Level::boxMesh({-0.015f, -0.02f, -0.66f}, {0.015f, 0.01f, -0.45f}, 1.f), dark},
+                    {Level::boxMesh({-0.03f, -0.13f, -0.14f}, {0.03f, -0.05f, -0.07f}, 1.f), dark},
+                    {Level::boxMesh({-0.012f, -0.017f, -0.68f}, {0.012f, 0.007f, -0.66f}, 1.f), glowing},
+                };
+
                 // A soft round sprite for the embers, tinted per particle.
                 k3::Image glow(32, 32, Color::Transparent);
 
@@ -165,14 +200,22 @@ namespace
             {
                 m_clock += dt;
                 m_yaw += yawTurn;
-                m_pitch = std::clamp(m_pitch + pitchTurn, -1.25f, 0.35f);
+                m_pitch = std::clamp(m_pitch + pitchTurn, -1.25f, m_firstPerson ? 1.4f : 0.35f);
                 m_player.update(dt, input, m_yaw, m_level);
             }
 
             void nextTimeOfDay() { setTimeOfDay((m_time + 1) % TIMES.size()); }
             void toggleFog() { m_fog = !m_fog; }
-            void toggleFlatRobot() { m_player.toggleFlatShading(); }
             void toggleBounds() { m_bounds = !m_bounds; }
+            void toggleFlatRobot() { m_player.toggleFlatShading(); }
+            void toggleFirstPerson() { m_firstPerson = !m_firstPerson; }
+            [[nodiscard]] bool firstPerson() const noexcept { return m_firstPerson; }
+            void setToneMapping(k3::ToneMapping mode) { m_tone = mode; }
+            void nextToneMapping()
+            {
+                m_tone = m_tone == k3::ToneMapping::None ? k3::ToneMapping::ACES : m_tone == k3::ToneMapping::ACES ? k3::ToneMapping::Reinhard : k3::ToneMapping::None;
+            }
+            [[nodiscard]] k3::ToneMapping toneMapping() const noexcept { return m_tone; }
 
             [[nodiscard]] float cameraYaw() const noexcept { return m_yaw; }
             [[nodiscard]] const Player& player() const noexcept { return m_player; }
@@ -187,8 +230,8 @@ namespace
 
                 rasterizer.beginFrame(view, environment());
                 m_level.draw(rasterizer);
-                m_player.draw(rasterizer);
-                drawEmbers(rasterizer, view);
+                if (!m_firstPerson)
+                    m_player.draw(rasterizer);
 
                 // The collision boxes (yellow, the glass one cyan) and the character's (green): debug lines.
                 if (m_bounds) {
@@ -199,13 +242,60 @@ namespace
 
                     rasterizer.drawBounds({{feet.x - Player::RADIUS, feet.y, feet.z - Player::RADIUS}, {feet.x + Player::RADIUS, feet.y + Player::HEIGHT, feet.z + Player::RADIUS}}, Color{0.2f, 1.f, 0.3f, 1.f}, k3::Math::Matrix4::identity(), false);
                 }
+                drawEmbers(rasterizer, view);
+                if (m_firstPerson)
+                    drawWeapon(rasterizer, view);
             }
 
         private:
+            // First person: the weapon is a layer of its own, seen with a narrower field of view and a close near
+            // plane, so it never goes through a wall; the crosshair is the 2D overlay.
+            void drawWeapon(k3::IRasterizer& rasterizer, const k3::Camera& view)
+            {
+                k3::Camera weaponCamera = view;
+                weaponCamera.fovY = 0.8f;
+                weaponCamera.nearPlane = 0.02f;
+                weaponCamera.farPlane = 5.f;
+
+                // Camera space -> world: the columns are the camera's axes (back = -forward).
+                const Vector3f right = view.right(), up = view.up(), back = -1.f * view.forward();
+                const float sway = std::min(m_player.speed() / 6.5f, 1.f);
+                const Vector3f hold{0.12f + 0.008f * std::sin(m_clock * 9.f) * sway, -0.1f + 0.01f * std::abs(std::cos(m_clock * 9.f)) * sway, -0.3f};
+                const k3::Math::Matrix4 toWorld{
+                    right.x, up.x, back.x, view.position.x,
+                    right.y, up.y, back.y, view.position.y,
+                    right.z, up.z, back.z, view.position.z,
+                    0.f, 0.f, 0.f, 1.f,
+                };
+                const k3::Math::Matrix4 placement = toWorld * k3::Math::Matrix4::translate(hold) * k3::Math::Matrix4::scale(0.55f);
+
+                rasterizer.beginLayer(weaponCamera);
+                for (const auto& [mesh, material] : m_weapon)
+                    rasterizer.draw(mesh, material, placement);
+
+                const float w = static_cast<float>(rasterizer.width()), h = static_cast<float>(rasterizer.height());
+                const Color shade{0.f, 0.f, 0.f, 0.6f}, line{1.f, 1.f, 1.f, 0.9f};
+
+                rasterizer.drawRect({w / 2 - 9.f, h / 2 - 2.f, 18.f, 4.f}, shade);
+                rasterizer.drawRect({w / 2 - 2.f, h / 2 - 9.f, 4.f, 18.f}, shade);
+                rasterizer.drawRect({w / 2 - 8.f, h / 2 - 1.f, 16.f, 2.f}, line);
+                rasterizer.drawRect({w / 2 - 1.f, h / 2 - 8.f, 2.f, 16.f}, line);
+            }
+
             // Third person: behind the character, pulled in when a block is in the way.
             [[nodiscard]] k3::Camera camera() const
             {
                 k3::Camera camera;
+
+                if (m_firstPerson) {
+                    camera.yaw = m_yaw;
+                    camera.pitch = m_pitch;
+                    camera.position = m_player.position() + Vector3f{0.f, 1.65f, 0.f};
+                    camera.fovY = 1.25f;
+                    camera.nearPlane = 0.1f;
+                    camera.farPlane = 220.f;
+                    return camera;
+                }
                 const Vector3f target = m_player.position() + Vector3f{0.f, 1.35f, 0.f};
 
                 camera.yaw = m_yaw;
@@ -280,6 +370,9 @@ namespace
 
                 environment.ambient = time.ambient;
                 environment.ambientGround = time.ambientGround;
+                // The sun is brighter than 1: without tone mapping it clamps, with it the highlights keep their shape.
+                environment.toneMapping = m_tone;
+                environment.exposure = 0.75f;
                 environment.skybox = m_sky;
                 environment.clearColor = time.horizon;
                 environment.lights = {k3::Light::directional(time.sunDirection, time.sunColor, time.sunIntensity)};
@@ -308,12 +401,15 @@ namespace
             Player       m_player;
             k3::Skybox   m_sky;
             std::size_t  m_time = 0;
+            std::vector<std::pair<std::shared_ptr<k3::Mesh>, std::shared_ptr<k3::Material>>> m_weapon;     // In camera space, pointing along -z
+            bool                               m_firstPerson = false;
             k3::BillboardBatch                 m_embers;
             std::shared_ptr<k3::Material>      m_emberMaterial;
             float                              m_clock = 0.f;        // Seconds since the start
             bool         m_lighterShadows;
             bool         m_fog = true;
             bool         m_bounds = false;
+            k3::ToneMapping m_tone = k3::ToneMapping::None;
             float        m_yaw = 0.4f;
             float        m_pitch = -0.4f;
     };
@@ -376,7 +472,7 @@ int main(int argc, char** argv)
     const auto options = parseOptions(argc, argv);
 
     if (!options) {
-        std::cerr << "usage: " << argv[0] << " [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--scale 0.05-1] [--screenshot file.png [--seconds S]] [--bounds] [--flat]" << std::endl;
+        std::cerr << "usage: " << argv[0] << " [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--scale 0.05-1] [--tone none|reinhard|aces] [--flat] [--bounds] [--first-person] [--screenshot file.png [--seconds S]]" << std::endl;
         return 2;
     }
 
@@ -387,10 +483,13 @@ int main(int argc, char** argv)
         return 1;
 
     World world(Level(assets), std::move(*player), options->timeOfDay, options->backend == k3::Backend::Software);
-    if (options->flatRobot)
-        world.toggleFlatRobot();
     if (options->bounds)
         world.toggleBounds();
+    if (options->flatRobot)
+        world.toggleFlatRobot();
+    if (options->firstPerson)
+        world.toggleFirstPerson();
+    world.setToneMapping(options->toneMapping);
     const bool windowless = !options->screenshot.empty() && options->backend == k3::Backend::Software;
     constexpr unsigned WIDTH = 1280, HEIGHT = 720;
 
@@ -457,15 +556,20 @@ int main(int argc, char** argv)
                 world.toggleFog();
             else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::G)
                 world.toggleFlatRobot();
+            else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::M)
+                world.nextToneMapping();
+            else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::C)
+                world.toggleFirstPerson();
             else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::H)
                 showHud = !showHud;
+            else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::B)
+                world.toggleBounds();
             else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::R) {
                 // Full resolution, half, then big pixels.
                 const float scale = rasterizer->renderScale();
 
                 rasterizer->setRenderScale(scale > 0.9f ? 0.5f : scale > 0.4f ? 0.25f : 1.f);
-            } else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::B)
-                world.toggleBounds();
+            }
             else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::V) {
                 const auto next = rasterizer->antiAliasing() == k3::AntiAliasing::None   ? k3::AntiAliasing::FXAA
                                   : rasterizer->antiAliasing() == k3::AntiAliasing::FXAA ? k3::AntiAliasing::SSAA

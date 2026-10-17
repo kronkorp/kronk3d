@@ -87,6 +87,7 @@ namespace k3::gl
     inline constexpr GLenum TEXTURE0                = 0x84C0;
     inline constexpr GLenum RGBA8                   = 0x8058;
     inline constexpr GLenum SRGB8_ALPHA8            = 0x8C43;
+    inline constexpr GLenum RGBA16F                 = 0x881A;
     inline constexpr GLenum DEPTH_COMPONENT24       = 0x81A6;
     inline constexpr GLenum DEPTH_COMPONENT32F      = 0x8CAC;
     inline constexpr GLenum TEXTURE_COMPARE_MODE    = 0x884C;
@@ -150,6 +151,8 @@ namespace k3::gl
         X(VertexAttrib4f,           void,           (GLuint, GLfloat, GLfloat, GLfloat, GLfloat)) \
         X(DrawArrays,               void,           (GLenum, GLint, GLsizei)) \
         X(DrawElements,             void,           (GLenum, GLsizei, GLenum, const void*)) \
+        X(DrawElementsInstanced,    void,           (GLenum, GLsizei, GLenum, const void*, GLsizei)) \
+        X(VertexAttribDivisor,      void,           (GLuint, GLuint)) \
         X(CreateShader,             GLuint,         (GLenum)) \
         X(ShaderSource,             void,           (GLuint, GLsizei, const GLchar* const*, const GLint*)) \
         X(CompileShader,            void,           (GLuint)) \

@@ -8,6 +8,7 @@
 
 #include "Level.hpp"
 #include <kronk3d/Kronk3d.hpp>
+#include <cmath>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -36,6 +37,7 @@ class Player
         void toggleFlatShading();
 
         [[nodiscard]] const k3::Math::Vector3f& position() const noexcept { return m_position; }
+        [[nodiscard]] float speed() const noexcept { return std::hypot(m_velocity.x, m_velocity.z); }
         [[nodiscard]] std::string_view clip() const noexcept { return m_animator.clip(); }
 
     private:

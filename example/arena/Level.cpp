@@ -142,6 +142,37 @@ Level::Level(const std::filesystem::path& assets)
         m_solids.push_back(box);
     }
 
+    // Grass: thousands of copies of one small pyramid, in a single instanced draw. They have no collision.
+    {
+        auto mesh = std::make_shared<k3::Mesh>();
+        const Vector3f apex{0.f, 0.55f, 0.f};
+        const Vector3f corner[4] = {{-0.12f, 0.f, -0.12f}, {0.12f, 0.f, -0.12f}, {0.12f, 0.f, 0.12f}, {-0.12f, 0.f, 0.12f}};
+
+        for (int side = 0; side < 4; ++side) {
+            const Vector3f a = corner[side], b = corner[(side + 1) % 4];
+            const Vector3f faceNormal = Vector3f::normalize(Vector3f::cross(b - a, apex - a));
+            const auto first = static_cast<std::uint32_t>(mesh->positions.size());
+
+            mesh->positions.insert(mesh->positions.end(), {a, b, apex});
+            mesh->normals.insert(mesh->normals.end(), {faceNormal, faceNormal, faceNormal});
+            mesh->indices.insert(mesh->indices.end(), {first, first + 1, first + 2});
+        }
+        auto material = std::make_shared<k3::Material>();
+
+        material->diffuse = {0.25f, 0.55f, 0.2f, 1.f};
+        material->castShadows = false;
+        m_tuft = {mesh, material};
+
+        Random grass;
+        grass.state = 777u;
+        for (int i = 0; i < 3000; ++i) {
+            const float x = grass.range(-HALF_SIZE + 1.f, HALF_SIZE - 1.f), z = grass.range(-HALF_SIZE + 1.f, HALF_SIZE - 1.f);
+            const float height = grass.range(0.6f, 1.6f);
+
+            m_tufts.push_back(k3::Math::Matrix4::translate({x, 0.f, z}) * k3::Math::Matrix4::rotateZX(grass.range(0.f, 6.28f)) * k3::Math::Matrix4::scale({1.f, height, 1.f}));
+        }
+    }
+
     // Scattered crates, more than the camera sees at once: this is what the culling is for.
     Random random;
     for (int i = 0; i < 170; ++i) {
@@ -159,6 +190,11 @@ Level::Level(const std::filesystem::path& assets)
         if (!overlaps)
             addSolid(box, crate, 1.5f);
     }
+}
+
+std::shared_ptr<k3::Mesh> Level::boxMesh(const k3::Math::Vector3f& min, const k3::Math::Vector3f& max, float tile)
+{
+    return makeBox(min, max, tile);
 }
 
 void Level::addSolid(const Box& box, const std::shared_ptr<k3::Material>& material, float tile)
@@ -186,4 +222,5 @@ void Level::draw(k3::IRasterizer& rasterizer) const
 {
     for (const Prop& prop : m_props)
         rasterizer.draw(prop.mesh, prop.material, k3::Math::Matrix4::identity());
+    rasterizer.drawInstances(m_tuft.mesh, m_tuft.material, m_tufts);
 }

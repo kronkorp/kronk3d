@@ -12,10 +12,12 @@ Both backends produce the same image: the shading code is mirrored, and tests co
 - **Rendering API**
   - A frame is `beginFrame(camera, environment)`, any number of `draw(...)` calls, then `endFrame()`.
   - Backends are created at runtime with `createRasterizer(Backend::Software | Backend::OpenGL)`.
-  - **Billboards** (`BillboardBatch`): camera-facing quads (particles, sparks, smoke) with a position, size, color, rotation and sprite-sheet cell each, sorted and drawn in one call; the arena's torch embers are one.
-  - **Render scale** (`setRenderScale`, `RasterizerConfig::renderScale`): the scene renders at a fraction of the output size and is enlarged with no filtering, for a low-resolution look or to save fill rate; the 2D overlay stays sharp.
   - **Layers** (`beginLayer(camera)`): what follows is drawn over the scene with its own camera and a cleared depth buffer, for a first-person weapon with its own field of view that never goes through walls. It shares the lights, the fog and the shadows it receives (it casts none).
   - **Debug lines** (`drawLine`, `drawBounds`): world-space segments and boxes, depth-tested or always visible, per layer.
+  - **Render scale** (`setRenderScale`, `RasterizerConfig::renderScale`): the scene renders at a fraction of the output size and is enlarged with no filtering, for a low-resolution look or to save fill rate; the 2D overlay stays sharp.
+  - **Billboards** (`BillboardBatch`): camera-facing quads (particles, sparks, smoke) with a position, size, color, rotation and sprite-sheet cell each, sorted and drawn in one call; the arena's torch embers are one.
+  - **Instancing** (`drawInstances`): one mesh at many places, drawn in one call on OpenGL with each instance culled (3000 grass tufts in the arena); 8000 objects cost about 1 ms of CPU instead of 16.
+  - **HDR and tone mapping** (`Environment::toneMapping`, `exposure`): the scene keeps values above 1 (a bright sun, emissive materials) and is mapped to the display range with Reinhard or an ACES filmic curve, before anti-aliasing; off by default. The 2D overlay is not mapped.
   - **2D overlay** for a HUD or menus, identical on both backends: `drawRect` and `drawImage` (sprite sheets, tint, flipping), in output pixels, drawn over the 3D frame after anti-aliasing.  - Draws outside the camera frustum are skipped by the main pass (`FrameStats::culledDraws`); they still cast shadows.
 - **Assets**
   - Wavefront **OBJ + MTL** loading: polygons with any number of sides, negative indices, vertex colors.
@@ -192,7 +194,7 @@ Textures use their own sampler (`Nearest` for pixel art) and keep their alpha.
 
 ### Arena
 
-`kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--scale 0.05-1] [--screenshot file.png [--seconds S]] [--bounds] [--flat]`
+`kronk3d_arena [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--scale 0.05-1] [--tone none|reinhard|aces] [--flat] [--bounds] [--first-person] [--screenshot file.png [--seconds S]]`
 
 A third-person showcase: you drive the robot of the Godot 3D platformer demo (`example/assets/robot`,
 MIT) around a stone arena with walls, stairs, 170 crates, torch pillars and a glass panel. It uses the
@@ -204,11 +206,13 @@ overlay (counters drawn with a pixel font, and a minimap).
 |---|---|
 | `ZQSD` / `WASD`, `Shift`, `Space` | Move relative to the camera, run, jump |
 | Mouse, arrow keys | Camera |
+| `C` | First person: the weapon is drawn on a layer of its own (own field of view, never through a wall), with a crosshair |
 | `T` | Day, sunset, night |
 | `F` | Fog on / off |
 | `V` | Anti-aliasing: none, FXAA, SSAA |
-| `G` | Flat-shaded (faceted) robot |
 | `R` | Render resolution: full, half, quarter (big pixels); the HUD stays sharp |
+| `G` | Flat-shaded (faceted) robot |
+| `M` | Tone mapping: none, ACES, Reinhard |
 | `H` | Hide / show the HUD (frames per second, draw calls, draws culled) |
 | `B` | Collision boxes, drawn as debug lines |
 

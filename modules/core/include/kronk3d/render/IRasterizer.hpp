@@ -118,6 +118,11 @@ namespace k3
             // A null material draws with a default (white, lit) one.
             virtual void draw(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material> material, const Math::Matrix4& transform) = 0;
 
+            // The same mesh and material at several places. The OpenGL backend draws them in one call, culling each
+            // instance (instances with a mirroring transform, and blended materials, are drawn one by one); the
+            // software backend draws them one by one. Counts as `transforms.size()` draws in the statistics.
+            virtual void drawInstances(std::shared_ptr<const Mesh> mesh, std::shared_ptr<const Material> material, std::span<const Math::Matrix4> transforms);
+
             // Draws every primitive of the model with the same transform.
             void draw(const Model& model, const Math::Matrix4& transform = Math::Matrix4::identity());
 
