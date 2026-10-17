@@ -3,6 +3,7 @@
 //                   [--bounds] [--screenshot file.png [--seconds S]]
 //                   [--scale 0.05-1] [--screenshot file.png [--seconds S]]
 //                   [--flat] [--screenshot file.png [--seconds S]]
+//                   [--tone none|reinhard|aces] [--screenshot file.png [--seconds S]]
 //
 // ZQSD / WASD: move (relative to the camera)    Shift: run     Space: jump
 // Mouse / arrows: camera     T: time of day    F: fog    V: anti-aliasing    H: HUD    B: collision boxes
@@ -49,6 +50,7 @@ namespace
         bool             bounds = false;        // Draw the collision boxes (debug lines)
         float            renderScale = 1.f;
         bool             flatRobot = false;
+        k3::ToneMapping  toneMapping = k3::ToneMapping::None;
         std::string      screenshot{};
         float            seconds = 3.f;
     };
@@ -120,6 +122,16 @@ namespace
                 options.renderScale = static_cast<float>(std::atof(argv[++i]));
             } else if (arg == "--flat") {
                 options.flatRobot = true;
+            } else if (arg == "--tone" && hasValue) {
+                const std::string_view value = argv[++i];
+                if (value == "none")
+                    options.toneMapping = k3::ToneMapping::None;
+                else if (value == "reinhard")
+                    options.toneMapping = k3::ToneMapping::Reinhard;
+                else if (value == "aces")
+                    options.toneMapping = k3::ToneMapping::ACES;
+                else
+                    return std::nullopt;
             } else if (arg == "--screenshot" && hasValue) {
                 options.screenshot = argv[++i];
             } else if (arg == "--seconds" && hasValue) {
@@ -174,6 +186,12 @@ namespace
             void toggleFog() { m_fog = !m_fog; }
             void toggleBounds() { m_bounds = !m_bounds; }
             void toggleFlatRobot() { m_player.toggleFlatShading(); }
+            void setToneMapping(k3::ToneMapping mode) { m_tone = mode; }
+            void nextToneMapping()
+            {
+                m_tone = m_tone == k3::ToneMapping::None ? k3::ToneMapping::ACES : m_tone == k3::ToneMapping::ACES ? k3::ToneMapping::Reinhard : k3::ToneMapping::None;
+            }
+            [[nodiscard]] k3::ToneMapping toneMapping() const noexcept { return m_tone; }
 
             [[nodiscard]] float cameraYaw() const noexcept { return m_yaw; }
             [[nodiscard]] const Player& player() const noexcept { return m_player; }
@@ -281,6 +299,9 @@ namespace
 
                 environment.ambient = time.ambient;
                 environment.ambientGround = time.ambientGround;
+                // The sun is brighter than 1: without tone mapping it clamps, with it the highlights keep their shape.
+                environment.toneMapping = m_tone;
+                environment.exposure = 0.75f;
                 environment.skybox = m_sky;
                 environment.clearColor = time.horizon;
                 environment.lights = {k3::Light::directional(time.sunDirection, time.sunColor, time.sunIntensity)};
@@ -315,6 +336,7 @@ namespace
             bool         m_lighterShadows;
             bool         m_fog = true;
             bool         m_bounds = false;
+            k3::ToneMapping m_tone = k3::ToneMapping::None;
             float        m_yaw = 0.4f;
             float        m_pitch = -0.4f;
     };
@@ -380,6 +402,7 @@ int main(int argc, char** argv)
         std::cerr << "usage: " << argv[0] << " [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--bounds] [--screenshot file.png [--seconds S]]" << std::endl;
         std::cerr << "usage: " << argv[0] << " [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--scale 0.05-1] [--screenshot file.png [--seconds S]]" << std::endl;
         std::cerr << "usage: " << argv[0] << " [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--flat] [--screenshot file.png [--seconds S]]" << std::endl;
+        std::cerr << "usage: " << argv[0] << " [--backend software|opengl] [--aa none|fxaa|ssaa] [--time day|sunset|night] [--tone none|reinhard|aces] [--screenshot file.png [--seconds S]]" << std::endl;
         return 2;
     }
 
@@ -394,6 +417,7 @@ int main(int argc, char** argv)
         world.toggleBounds();
     if (options->flatRobot)
         world.toggleFlatRobot();
+    world.setToneMapping(options->toneMapping);
     const bool windowless = !options->screenshot.empty() && options->backend == k3::Backend::Software;
     constexpr unsigned WIDTH = 1280, HEIGHT = 720;
 
@@ -460,6 +484,8 @@ int main(int argc, char** argv)
                 world.toggleFog();
             else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::G)
                 world.toggleFlatRobot();
+            else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::M)
+                world.nextToneMapping();
             else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::H)
                 showHud = !showHud;
             else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::B)

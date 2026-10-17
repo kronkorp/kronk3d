@@ -18,6 +18,16 @@
 namespace k3
 {
 
+    // How the scene's colors reach the screen. None (the default) clamps them to [0, 1]. Reinhard and ACES
+    // render the scene in high dynamic range instead (a bright sun, emissive materials or a `Skybox::tint`
+    // above 1 keep their detail) and map it to [0, 1] once the whole scene is drawn, before anti-aliasing:
+    // Reinhard is x / (1 + x), ACES a filmic S-curve. The 2D overlay is not mapped.
+    enum class ToneMapping {
+        None,
+        Reinhard,
+        ACES
+    };
+
     // Lights past this count are ignored (fixed-size uniform arrays on the GPU backends).
     inline constexpr std::size_t MAX_LIGHTS = 8;
 
@@ -60,6 +70,8 @@ namespace k3
         // Hemisphere light: when set, the ambient light goes from `ambient` for surfaces facing up to this
         // color for surfaces facing down (a sky above, a floor below), with their normal's height in between.
         std::optional<Math::Color> ambientGround{};
+        ToneMapping        toneMapping = ToneMapping::None;
+        float              exposure = 1.f;        // Multiplies the scene's colors before the curve (not used by None)
         std::vector<Light> lights{};
         ShadowSettings     shadows{};
     };
