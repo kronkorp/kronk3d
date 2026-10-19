@@ -4,6 +4,9 @@
 #include <memory>
 #include <ostream>
 
+namespace k3::logging
+{
+
 class ALoggerHandler : public ILoggerHandler {
 public:
     ALoggerHandler(std::shared_ptr<std::ostream> stream) : m_streamHandler(stream) {};
@@ -12,3 +15,5 @@ public:
 protected:
     std::shared_ptr<std::ostream> m_streamHandler;
 };
+
+}

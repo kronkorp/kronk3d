@@ -12,6 +12,9 @@
 #include <iostream>
 #include <vector>
 
+namespace k3::logging
+{
+
 class Logger {
 public:
     Logger();
@@ -177,3 +180,5 @@ private:
     LoggerLevel                                  m_currentLevel = LoggerLevel::INFO;  //!< The current level of the logger (Debuf, info, ...). All lower level will be ignored
     bool                                         m_enable = true;
 };
+
+}

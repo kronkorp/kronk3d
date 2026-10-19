@@ -1,6 +1,6 @@
 #include <kronk3d/io/GltfLoader.hpp>
 #include "third_party/cgltf.h"
-#include "utils/Log.hpp"
+#include <kronk3d/utils/Log.hpp>
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>

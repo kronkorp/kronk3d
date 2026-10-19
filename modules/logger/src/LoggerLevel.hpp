@@ -4,6 +4,9 @@
 #include <string>
 #include <ctime>
 
+namespace k3::logging
+{
+
 ////////////////////////////////////////////////////////////////////////////
 /**
     * @brief  Enum corresponding to all types of log levels
@@ -23,3 +26,5 @@ enum class LoggerLevel {
 std::string timeToStr(void);
 std::ostream& operator<<(std::ostream& os, LoggerLevel level);
 const char *ColorToLevel(LoggerLevel level);
+
+}

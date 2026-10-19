@@ -3,6 +3,9 @@
 #include <iomanip>
 #include <sstream>
 
+namespace k3::logging
+{
+
 const char *ColorToLevel(LoggerLevel level)
 {
     switch (level) {
@@ -34,4 +37,6 @@ std::string timeToStr(void)
     std::stringstream ss;
     ss << std::put_time(localTime, "%Y-%m-%d %H:%M:%S"); 
     return ss.str();
+}
+
 }
