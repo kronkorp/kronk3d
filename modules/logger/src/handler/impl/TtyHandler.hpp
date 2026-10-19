@@ -4,6 +4,9 @@
 #include <memory>
 #include <ostream>
 
+namespace k3::logging
+{
+
 class TtyLoggerHandler : public ALoggerHandler {
 public:
     TtyLoggerHandler(std::shared_ptr<std::ostream> stream) : ALoggerHandler(stream) {};
@@ -13,3 +16,5 @@ public:
         *this->m_streamHandler << ColorToLevel(level) << level  << "\033[0m" << timeToStr() << " >> " << message << std::endl;
     }
 };
+
+}

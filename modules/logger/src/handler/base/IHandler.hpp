@@ -2,6 +2,9 @@
 #include <string>
 #include "../../LoggerLevel.hpp"
 
+namespace k3::logging
+{
+
 class ILoggerHandler
 {
 public:
@@ -9,3 +12,5 @@ public:
 
     virtual void log(LoggerLevel level, const std::string& message) = 0;
 };
+
+}

@@ -1,6 +1,6 @@
 #include <kronk3d/scene/Texture.hpp>
 #include <kronk3d/math/Vector.hpp>
-#include "utils/Log.hpp"
+#include <kronk3d/utils/Log.hpp>
 #include "utils/Srgb.hpp"
 #include <algorithm>
 #include <cmath>

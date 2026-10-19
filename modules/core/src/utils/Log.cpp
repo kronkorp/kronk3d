@@ -1,9 +1,11 @@
-#include "Log.hpp"
+#include <kronk3d/utils/Log.hpp>
 #include "Logger.hpp"
 #include <mutex>
 
 namespace
 {
+
+    using k3::logging::Logger;
 
     void consoleSink(k3::LogLevel level, std::string_view message)
     {

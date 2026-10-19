@@ -1,6 +1,6 @@
 #include <kronk3d/io/ObjLoader.hpp>
 #include "render/software/ThreadPool.hpp"
-#include "utils/Log.hpp"
+#include <kronk3d/utils/Log.hpp>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
