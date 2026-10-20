@@ -4,6 +4,9 @@
 #include <memory>
 #include <ostream>
 
+namespace k3::logging
+{
+
 class FileLoggerHandler : public ALoggerHandler {
 public:
     FileLoggerHandler(std::shared_ptr<std::ostream> stream) : ALoggerHandler(stream) {};
@@ -13,3 +16,5 @@ public:
         *this->m_streamHandler << level << timeToStr() << " >> " << message << std::endl;
     }
 };
+
+}

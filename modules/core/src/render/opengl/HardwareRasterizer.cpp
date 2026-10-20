@@ -1,6 +1,6 @@
 #include <kronk3d/render/opengl/HardwareRasterizer.hpp>
 #include "GL.hpp"
-#include "utils/Log.hpp"
+#include <kronk3d/utils/Log.hpp>
 #include "Program.hpp"
 #include "Shaders.hpp"
 #include "render/Frustum.hpp"

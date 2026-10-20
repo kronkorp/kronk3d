@@ -31,3 +31,6 @@
 #include <kronk3d/render/opengl/HardwareRasterizer.hpp>
 #include <kronk3d/render/opengl/ImagePresenter.hpp>
 #include <kronk3d/render/software/SoftwareRasterizer.hpp>
+
+#include <kronk3d/utils/Log.hpp>
+#include <kronk3d/utils/Result.hpp>

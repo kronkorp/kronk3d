@@ -15,6 +15,9 @@
     #include <unistd.h>
 #endif
 
+namespace k3::logging
+{
+
 static bool isTerminal(std::FILE* stream)
 {
 #ifdef _WIN32
@@ -81,4 +84,6 @@ bool Logger::enable(void) const
 void Logger::enable(bool enabled)
 {
     this->m_enable = enabled;
+}
+
 }
