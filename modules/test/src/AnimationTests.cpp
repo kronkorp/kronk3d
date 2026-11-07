@@ -494,3 +494,113 @@ K3_TEST(gltf_rejects_garbage)
     K3_CHECK(!GltfLoader::loadFromMemory(glb.data(), glb.size() / 2, ""));
     K3_CHECK(!GltfLoader::load("/nonexistent/model.glb"));
 }
+
+namespace
+{
+
+    // The skeleton of twoBones() with its nodes in another order: "tip" first would break "parents come first", so the
+    // root is first and a spare node "extra" comes between the root and the tip
+    AnimatedModel otherOrder()
+    {
+        AnimatedModel model;
+
+        model.nodes = {{"root", -1, {}}, {"extra", 0, {}}, {"tip", 0, {{0.f, 1.f, 0.f}, {0.f, 0.f, 0.f, 1.f}, {1.f, 1.f, 1.f}}}};
+        return model;
+    }
+
+    // A triangle skinned to the last joint of its skin ("tip", node 2 of its own model)
+    AnimatedModel tipTriangle(const char* lastJoint = "tip")
+    {
+        AnimatedModel model = otherOrder();
+        auto mesh = std::make_shared<Mesh>();
+
+        model.nodes[2].name = lastJoint;
+        mesh->positions = {{0.f, 1.f, 0.f}, {1.f, 1.f, 0.f}, {0.f, 2.f, 0.f}};
+        mesh->normals.assign(3, {0.f, 0.f, 1.f});
+        mesh->joints.assign(3, {1, 0, 0, 0});
+        mesh->weights.assign(3, {1.f, 0.f, 0.f, 0.f});
+        mesh->indices = {0, 1, 2};
+        Skin skin;
+        skin.joints = {0, 2};
+        skin.inverseBind = {Matrix4::identity(), Matrix4::translate({0.f, -1.f, 0.f})};
+        model.skins.push_back(skin);
+        model.primitives.push_back({mesh, nullptr, 0, 0});
+        return model;
+    }
+
+}
+
+K3_TEST(attach_binds_a_part_to_the_joints_by_name)
+{
+    AnimatedModel body = twoBones();     // tip is node 1
+    const AnimatedModel part = tipTriangle();   // tip is node 2
+
+    K3_CHECK(attach(body, part).empty());
+    K3_REQUIRE(body.primitives.size() == 2 && body.skins.size() == 2);
+    K3_CHECK(body.primitives[1].skin == 1);
+    K3_CHECK(body.skins[1].joints == (std::vector<int>{0, 1}));     // the nodes of the body, not those of the part
+
+    Animator animator(std::make_shared<AnimatedModel>(body));
+    RecordingRasterizer rasterizer;
+
+    animator.play("Lift", {.loop = false, .fade = 0.f});
+    animator.update(1.f);
+    rasterizer.beginFrame({}, {});
+    animator.draw(rasterizer);
+    K3_REQUIRE(rasterizer.calls.size() == 2);
+    K3_CHECK_NEAR(rasterizer.calls[1].mesh->positions[0].y, 3.f, 1e-4f);    // the tip went up by 2: so did the triangle
+}
+
+K3_TEST(attach_names_the_joints_that_are_lacking)
+{
+    AnimatedModel body = twoBones();
+    const auto lacking = attach(body, tipTriangle("elbow"));
+
+    K3_REQUIRE(lacking.size() == 1);
+    K3_CHECK(lacking[0] == "elbow");
+    K3_CHECK(body.skins[1].joints == (std::vector<int>{0, 0}));     // it follows its parent, the root
+}
+
+K3_TEST(adopt_clips_finds_the_nodes_by_name)
+{
+    AnimatedModel library = otherOrder();       // "tip" is node 2 here
+    AnimatedModel body = twoBones();            // and node 1 here
+    using Path = AnimationChannel::Path;
+    using Interpolation = AnimationChannel::Interpolation;
+
+    library.animations.push_back({"Slide", 1.f, {
+        channel(2, Path::Translation, Interpolation::Linear, {0.f, 1.f}, {{0.f, 1.f, 0.f, 0.f}, {5.f, 1.f, 0.f, 0.f}}),
+        channel(1, Path::Translation, Interpolation::Linear, {0.f, 1.f}, {{0.f, 0.f, 0.f, 0.f}, {9.f, 0.f, 0.f, 0.f}})}});     // "extra": body has none
+    K3_CHECK(adoptClips(body, library) == 1);
+    K3_REQUIRE(body.animations.size() == 2);        // "Lift" and the new "Slide" that replaced the old one
+    K3_CHECK(body.animations[1].name == "Slide" || body.animations[0].name == "Slide");
+    const Animation& slide = body.animations[static_cast<std::size_t>(body.findAnimation("Slide"))];
+
+    K3_REQUIRE(slide.channels.size() == 1);
+    K3_CHECK(slide.channels[0].node == 1);
+    std::vector<Transform> pose = {body.nodes[0].local, body.nodes[1].local};
+
+    slide.sample(1.f, pose);
+    K3_CHECK_NEAR(pose[1].translation.x, 5.f, 1e-5f);
+}
+
+
+K3_TEST(a_hidden_primitive_is_not_drawn)
+{
+    AnimatedModel body = twoBones();
+
+    attach(body, tipTriangle());
+    Animator animator(std::make_shared<AnimatedModel>(body));
+    RecordingRasterizer rasterizer;
+
+    animator.hide(0);
+    K3_CHECK(animator.hidden(0) && !animator.hidden(1));
+    rasterizer.beginFrame({}, {});
+    animator.draw(rasterizer);
+    K3_CHECK(rasterizer.calls.size() == 1);
+    animator.hide(0, false);
+    animator.hide(99);      // (nothing)
+    rasterizer.beginFrame({}, {});
+    animator.draw(rasterizer);
+    K3_CHECK(rasterizer.calls.size() == 2);
+}

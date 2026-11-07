@@ -101,4 +101,15 @@ namespace k3
         [[nodiscard]] Math::Bounds3f bounds() const;
     };
 
+    // Puts the primitives of `part` on the skeleton of `target`, as a modular character is made (a body, then a hairstyle, a
+    // top, the feet: each file carries its own copy of one skeleton). A joint of the part is found in `target` by the name of its
+    // node; a skinned primitive gets a new Skin on those nodes with the inverse bind matrices of the part (the same bind pose),
+    // a rigid one follows the node of `target` that has the name of its node. A node that `target` lacks is replaced by its nearest
+    // ancestor in the part that `target` has, else by the root; the names of those joints are returned (without repeats).
+    std::vector<std::string> attach(AnimatedModel& target, const AnimatedModel& part);
+
+    // Copies the clips of `library` into `target`, the node of each channel found again by its name (a channel whose node `target`
+    // lacks is dropped; their count is returned). A clip of the same name replaces the one that was there.
+    std::size_t adoptClips(AnimatedModel& target, const AnimatedModel& library);
+
 }
