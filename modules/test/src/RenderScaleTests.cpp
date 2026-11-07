@@ -108,6 +108,39 @@ K3_TEST(render_scale_leaves_the_overlay_at_full_resolution)
     K3_CHECK(frame[5 * SIZE + 7].g == 0.f);
 }
 
+K3_TEST(the_scene_frame_is_not_enlarged)
+{
+    k3::SoftwareRasterizer rasterizer(SIZE, SIZE);
+
+    rasterizer.setRenderScale(0.25f);
+    rasterizer.beginFrame(orthoCamera(), blackEnvironment());
+    rasterizer.draw(triangle(), red(), k3::Math::Matrix4::identity());
+    rasterizer.drawRect({5.f, 5.f, 2.f, 2.f}, k3::Math::Color::White);
+    rasterizer.endFrame();
+
+    const k3::Image scene = rasterizer.readSceneFrame();
+
+    K3_REQUIRE(scene.width == 4 && scene.height == 4);                           // A quarter of the output on each side
+    K3_REQUIRE(scene.pixels.size() == 4 * 4 * 4);
+    K3_CHECK(scene.texel(0, 3)[0] == 255 && scene.texel(0, 3)[1] == 0);          // Lower left: red, inside
+    K3_CHECK(scene.texel(3, 0)[0] == 0);                                         // Upper right: outside
+    K3_CHECK(rasterizer.readPixels().width == SIZE);                             // readPixels() is still the output size
+    // The overlay is drawn at the output size: it is not in the frame of the scene
+    for (std::uint32_t i = 0; i < 4 * 4; ++i)
+        K3_CHECK(!(scene.pixels[i * 4 + 0] == 255 && scene.pixels[i * 4 + 1] == 255));
+}
+
+K3_TEST(the_scene_frame_with_a_scale_of_one_is_the_frame)
+{
+    k3::SoftwareRasterizer rasterizer(SIZE, SIZE);
+
+    rasterizer.beginFrame(orthoCamera(), blackEnvironment());
+    rasterizer.draw(triangle(), red(), k3::Math::Matrix4::identity());
+    rasterizer.endFrame();
+    K3_CHECK(rasterizer.readSceneFrame().pixels == rasterizer.readPixels().pixels);
+    K3_CHECK(rasterizer.readSceneFrame().width == SIZE);
+}
+
 K3_TEST(render_scale_is_clamped_and_one_changes_nothing)
 {
     k3::SoftwareRasterizer rasterizer(SIZE, SIZE);
