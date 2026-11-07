@@ -50,6 +50,7 @@ namespace k3
             void endFrame() override;
 
             [[nodiscard]] Image readPixels() override;
+            [[nodiscard]] Image readSceneFrame() override;
             [[nodiscard]] const FrameStats& stats() const noexcept override;
 
             // Last rendered frame in linear space (not gamma-encoded), clamped to [0, 1], row-major, top row first.

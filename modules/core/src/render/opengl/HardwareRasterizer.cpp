@@ -1378,29 +1378,51 @@ void k3::HardwareRasterizer::endFrame()
     impl.stats.frameMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
 
+namespace k3
+{
+namespace
+{
+    // What a framebuffer of `width` x `height` holds, as an image (top row first)
+    Image readFramebuffer(std::uint32_t framebuffer, std::uint32_t width, std::uint32_t height, std::uint32_t restore)
+    {
+        Image image;
+
+        image.width = width;
+        image.height = height;
+        image.pixels.resize(static_cast<std::size_t>(width) * height * 4);
+
+        gl::BindFramebuffer(gl::READ_FRAMEBUFFER, framebuffer);
+        gl::ReadBuffer(gl::COLOR_ATTACHMENT0);
+        gl::PixelStorei(gl::PACK_ALIGNMENT, 1);
+        gl::ReadPixels(0, 0, static_cast<gl::GLsizei>(width), static_cast<gl::GLsizei>(height), gl::RGBA, gl::UNSIGNED_BYTE, image.pixels.data());
+        gl::BindFramebuffer(gl::READ_FRAMEBUFFER, restore);
+
+        // OpenGL rows go bottom-up, Image rows top-down.
+        const std::size_t stride = static_cast<std::size_t>(width) * 4;
+        for (std::uint32_t y = 0; y < height / 2; ++y)
+            std::swap_ranges(image.pixels.begin() + y * stride, image.pixels.begin() + (y + 1) * stride, image.pixels.begin() + (height - 1 - y) * stride);
+        return image;
+    }
+}
+}
+
 k3::Image k3::HardwareRasterizer::readPixels()
 {
     auto& impl = *m_impl;
-    Image image;
 
     if (!impl.fbo)
-        return image;
+        return {};
+    return readFramebuffer(impl.finalFbo(), impl.width, impl.height, impl.presentFramebuffer.value_or(0));
+}
 
-    image.width = impl.width;
-    image.height = impl.height;
-    image.pixels.resize(static_cast<std::size_t>(impl.width) * impl.height * 4);
+k3::Image k3::HardwareRasterizer::readSceneFrame()
+{
+    auto& impl = *m_impl;
 
-    gl::BindFramebuffer(gl::READ_FRAMEBUFFER, impl.finalFbo());
-    gl::ReadBuffer(gl::COLOR_ATTACHMENT0);
-    gl::PixelStorei(gl::PACK_ALIGNMENT, 1);
-    gl::ReadPixels(0, 0, static_cast<gl::GLsizei>(impl.width), static_cast<gl::GLsizei>(impl.height), gl::RGBA, gl::UNSIGNED_BYTE, image.pixels.data());
-    gl::BindFramebuffer(gl::READ_FRAMEBUFFER, impl.presentFramebuffer.value_or(0));
-
-    // OpenGL rows go bottom-up, Image rows top-down.
-    const std::size_t stride = static_cast<std::size_t>(impl.width) * 4;
-    for (std::uint32_t y = 0; y < impl.height / 2; ++y)
-        std::swap_ranges(image.pixels.begin() + y * stride, image.pixels.begin() + (y + 1) * stride, image.pixels.begin() + (impl.height - 1 - y) * stride);
-    return image;
+    if (!impl.fbo)
+        return {};
+    // (sceneFbo() is the frame before it is enlarged: with a render scale of 1 it is the final one, so this is readPixels())
+    return readFramebuffer(impl.sceneFbo(), impl.sceneWidth, impl.sceneHeight, impl.presentFramebuffer.value_or(0));
 }
 
 const k3::FrameStats& k3::HardwareRasterizer::stats() const noexcept
