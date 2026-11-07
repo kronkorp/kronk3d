@@ -584,3 +584,23 @@ K3_TEST(adopt_clips_finds_the_nodes_by_name)
     K3_CHECK_NEAR(pose[1].translation.x, 5.f, 1e-5f);
 }
 
+
+K3_TEST(a_hidden_primitive_is_not_drawn)
+{
+    AnimatedModel body = twoBones();
+
+    attach(body, tipTriangle());
+    Animator animator(std::make_shared<AnimatedModel>(body));
+    RecordingRasterizer rasterizer;
+
+    animator.hide(0);
+    K3_CHECK(animator.hidden(0) && !animator.hidden(1));
+    rasterizer.beginFrame({}, {});
+    animator.draw(rasterizer);
+    K3_CHECK(rasterizer.calls.size() == 1);
+    animator.hide(0, false);
+    animator.hide(99);      // (nothing)
+    rasterizer.beginFrame({}, {});
+    animator.draw(rasterizer);
+    K3_CHECK(rasterizer.calls.size() == 2);
+}

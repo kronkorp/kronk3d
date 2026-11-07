@@ -60,6 +60,11 @@ namespace k3
 
             [[nodiscard]] const AnimatedModel& model() const noexcept { return *m_model; }
 
+            // A hidden primitive (its index in AnimatedModel::primitives) is neither deformed nor drawn by this animator, so
+            // that one assembled model can serve many looks (a body under a top). Not shared with the other animators of the model.
+            void hide(std::size_t primitive, bool hidden = true);
+            [[nodiscard]] bool hidden(std::size_t primitive) const noexcept { return primitive < m_hidden.size() && m_hidden[primitive]; }
+
             // Records every primitive for the current pose; `transform` places the model in the world.
             void draw(IRasterizer& rasterizer, const Math::Matrix4& transform = Math::Matrix4::identity());
 
@@ -81,6 +86,7 @@ namespace k3
             float  m_fadeElapsed  = 0.f;
             float  m_fadeDuration = 0.f;
             bool   m_dirty = true;
+            std::vector<bool> m_hidden{};   // Per primitive, as far as hide() went
 
             std::vector<Math::Matrix4>         m_globals{};
             std::vector<std::shared_ptr<Mesh>> m_posed{};   // Per primitive, null when rigid

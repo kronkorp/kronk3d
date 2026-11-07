@@ -165,7 +165,7 @@ void k3::Animator::evaluate()
     for (std::size_t p = 0; p < model.primitives.size(); ++p) {
         const auto& primitive = model.primitives[p];
 
-        if (primitive.skin < 0 || !primitive.mesh || !primitive.mesh->hasSkin())
+        if (primitive.skin < 0 || !primitive.mesh || !primitive.mesh->hasSkin() || hidden(p))
             continue;
         if (!m_posed[p])
             m_posed[p] = std::make_shared<Mesh>(*primitive.mesh);
@@ -182,9 +182,20 @@ void k3::Animator::draw(IRasterizer& rasterizer, const Math::Matrix4& transform)
     for (std::size_t p = 0; p < m_model->primitives.size(); ++p) {
         const auto& primitive = m_model->primitives[p];
 
+        if (hidden(p))
+            continue;
         if (m_posed[p])
             rasterizer.draw(m_posed[p], primitive.material, transform);
         else if (primitive.mesh && primitive.skin < 0)
             rasterizer.draw(primitive.mesh, primitive.material, transform * m_globals[static_cast<std::size_t>(primitive.node)]);
     }
+}
+
+void k3::Animator::hide(std::size_t primitive, bool hidden)
+{
+    if (primitive >= m_model->primitives.size())
+        return;
+    m_hidden.resize(m_model->primitives.size());
+    m_hidden[primitive] = hidden;
+    m_dirty = true;     // (a primitive shown again is deformed at its next draw)
 }
