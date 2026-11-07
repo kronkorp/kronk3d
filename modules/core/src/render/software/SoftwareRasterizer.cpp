@@ -1240,29 +1240,46 @@ void k3::SoftwareRasterizer::endFrame()
     impl.stats.frameMs = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
 }
 
+namespace
+{
+    // A frame of linear colors as the bytes of an image (sRGB, RGBA8)
+    k3::Image encodeFrame(const std::vector<k3::Math::Color>& frame, std::uint32_t width, std::uint32_t height, k3::sw::ThreadPool& pool)
+    {
+        k3::Image image;
+
+        image.width = width;
+        image.height = height;
+        image.pixels.resize(frame.size() * 4);
+
+        const std::uint8_t* encode = k3::srgb::encodeTable();
+        pool.parallelFor(image.height, [&](std::size_t y) {
+            for (std::size_t i = y * width; i < (y + 1) * width; ++i) {
+                const k3::Math::Color& c = frame[i];
+
+                image.pixels[i * 4 + 0] = k3::srgb::encode(c.r, encode);
+                image.pixels[i * 4 + 1] = k3::srgb::encode(c.g, encode);
+                image.pixels[i * 4 + 2] = k3::srgb::encode(c.b, encode);
+                image.pixels[i * 4 + 3] = static_cast<std::uint8_t>(std::clamp(c.a, 0.f, 1.f) * 255.f + 0.5f);
+            }
+        });
+        return image;
+    }
+}
+
 k3::Image k3::SoftwareRasterizer::readPixels()
 {
     auto& impl = *m_impl;
-    const std::uint32_t width = impl.outputWidth;
-    const std::vector<Math::Color>& frame = impl.finalColor();
-    Image image;
 
-    image.width = width;
-    image.height = impl.outputHeight;
-    image.pixels.resize(frame.size() * 4);
+    return encodeFrame(impl.finalColor(), impl.outputWidth, impl.outputHeight, impl.pool);
+}
 
-    const std::uint8_t* encode = srgb::encodeTable();
-    impl.pool.parallelFor(image.height, [&](std::size_t y) {
-        for (std::size_t i = y * width; i < (y + 1) * width; ++i) {
-            const Math::Color& c = frame[i];
+k3::Image k3::SoftwareRasterizer::readSceneFrame()
+{
+    auto& impl = *m_impl;
 
-            image.pixels[i * 4 + 0] = srgb::encode(c.r, encode);
-            image.pixels[i * 4 + 1] = srgb::encode(c.g, encode);
-            image.pixels[i * 4 + 2] = srgb::encode(c.b, encode);
-            image.pixels[i * 4 + 3] = static_cast<std::uint8_t>(std::clamp(c.a, 0.f, 1.f) * 255.f + 0.5f);
-        }
-    });
-    return image;
+    // (with a render scale of 1 this is the frame itself, overlay included: nothing is enlarged and nothing is added)
+    return impl.scaled() ? encodeFrame(impl.antiAliasing == AntiAliasing::None ? impl.color : impl.output, impl.sceneWidth, impl.sceneHeight, impl.pool)
+                         : readPixels();
 }
 
 const k3::FrameStats& k3::SoftwareRasterizer::stats() const noexcept

@@ -156,6 +156,11 @@ namespace k3
             // Last rendered frame, sRGB-encoded RGBA8, top row first. A GPU readback on hardware backends: slow.
             [[nodiscard]] virtual Image readPixels() = 0;
 
+            // The last frame at the size the scene was drawn at (width() and height() times renderScale()), not enlarged to the output
+            // size and without the 2D overlay, so a 2D renderer can enlarge it itself when it draws it: with a render scale of 0.33 that is
+            // a ninth of the pixels to read back and copy. With a render scale of 1 it is readPixels() (the overlay included).
+            [[nodiscard]] virtual Image readSceneFrame() = 0;
+
             [[nodiscard]] virtual const FrameStats& stats() const noexcept = 0;
     };
 

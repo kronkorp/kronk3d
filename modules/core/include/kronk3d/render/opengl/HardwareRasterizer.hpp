@@ -57,6 +57,7 @@ namespace k3
             void endFrame() override;
 
             [[nodiscard]] Image readPixels() override;
+            [[nodiscard]] Image readSceneFrame() override;
             [[nodiscard]] const FrameStats& stats() const noexcept override;
 
             // Framebuffer object the frame is copied to by endFrame(); nullopt keeps it internal only
