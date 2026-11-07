@@ -202,3 +202,86 @@ k3::Math::Bounds3f k3::AnimatedModel::bounds() const
     }
     return result;
 }
+
+namespace
+{
+
+    // The index of the node of `target` named `name`, or -1
+    int nodeNamed(const k3::AnimatedModel& target, const std::string& name)
+    {
+        for (std::size_t i = 0; i < target.nodes.size(); ++i)
+            if (target.nodes[i].name == name)
+                return static_cast<int>(i);
+        return -1;
+    }
+
+}
+
+std::vector<std::string> k3::attach(AnimatedModel& target, const AnimatedModel& part)
+{
+    // For each node of the part: the node of the target that stands for it (found by name, else its nearest ancestor that is there)
+    std::vector<int>         standIn(part.nodes.size(), 0);
+    std::vector<bool>        exact(part.nodes.size(), false);
+    std::vector<std::string> lacking;
+
+    for (std::size_t i = 0; i < part.nodes.size(); ++i) {
+        const int found = nodeNamed(target, part.nodes[i].name);
+
+        exact[i] = found >= 0;
+        if (found >= 0)
+            standIn[i] = found;
+        else if (part.nodes[i].parent >= 0)
+            standIn[i] = standIn[static_cast<std::size_t>(part.nodes[i].parent)];   // (parents come first)
+    }
+    const std::size_t firstSkin = target.skins.size();
+
+    for (const Skin& skin : part.skins) {
+        Skin moved;
+
+        moved.inverseBind = skin.inverseBind;
+        for (const int joint : skin.joints) {
+            moved.joints.push_back(standIn[static_cast<std::size_t>(joint)]);
+            const std::string& name = part.nodes[static_cast<std::size_t>(joint)].name;
+
+            if (!exact[static_cast<std::size_t>(joint)] && std::find(lacking.begin(), lacking.end(), name) == lacking.end())
+                lacking.push_back(name);
+        }
+        target.skins.push_back(std::move(moved));
+    }
+    for (AnimatedModel::Primitive primitive : part.primitives) {
+        if (primitive.skin >= 0)
+            primitive.skin += static_cast<int>(firstSkin);
+        else
+            primitive.node = standIn[static_cast<std::size_t>(primitive.node)];
+        target.primitives.push_back(std::move(primitive));
+    }
+    return lacking;
+}
+
+std::size_t k3::adoptClips(AnimatedModel& target, const AnimatedModel& library)
+{
+    std::size_t dropped = 0;
+
+    for (const Animation& clip : library.animations) {
+        Animation copy{clip.name, clip.duration, {}};
+
+        for (AnimationChannel channel : clip.channels) {
+            const int node = channel.node >= 0 ? nodeNamed(target, library.nodes[static_cast<std::size_t>(channel.node)].name) : -1;
+
+            if (node < 0) {
+                ++dropped;
+                continue;
+            }
+            channel.node = node;
+            copy.channels.push_back(std::move(channel));
+        }
+        const int same = target.findAnimation(clip.name);
+
+        if (same >= 0)
+            target.animations[static_cast<std::size_t>(same)] = std::move(copy);
+        else
+            target.animations.push_back(std::move(copy));
+    }
+    return dropped;
+}
+
