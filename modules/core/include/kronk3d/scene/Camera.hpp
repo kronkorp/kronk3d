@@ -24,6 +24,7 @@ namespace k3
         Math::Vector3f position{0.f, 0.f, 5.f};
         float yaw   = 0.f;                                  // Radians, positive turns right
         float pitch = 0.f;                                  // Radians, positive looks up
+        float roll  = 0.f;                                  // Radians around the view direction, positive leans the head to the right
 
         Projection projection = Projection::Perspective;
         float fovY        = std::numbers::pi_v<float> / 3.f; // Perspective: vertical field of view (radians)
